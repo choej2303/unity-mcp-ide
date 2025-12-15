@@ -163,7 +163,9 @@ namespace MCPForUnity.Editor.Clients
                 bool matches = false;
                 bool useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
                 
-                    // Check: HTTP (Only check this if we are in HTTP mode)
+                    // Check: HTTP vs Stdio using Factory
+                    // We only check if the configuration matches the *current* Unity Editor preference.
+                    
                     if (useHttpTransport)
                     {
                         if (!string.IsNullOrEmpty(configuredUrl))
@@ -174,51 +176,38 @@ namespace MCPForUnity.Editor.Clients
                     }
                     else
                     {
-                        // Check: Node.js Wrapper (Stdio) (Legacy)
-                        string expectedWrapper = AssetPathUtility.GetWrapperJsPath();
+                        // Get expected configuration from Factory
+                        string[] expectedArgs = McpServerCommandLoader.GenerateJsonArgs(useHttpTransport);
                         
-                        // Check: UV / Python Direct (Offline Mode)
-                        bool isUvCommand = !string.IsNullOrEmpty(command) && 
-                                          Path.GetFileNameWithoutExtension(command).IndexOf("uv", StringComparison.OrdinalIgnoreCase) >= 0;
-                                          
-                        if (isUvCommand && args != null)
+                        // 1. Check if command matches 'node' or 'uvx' (loosely)
+                        // Logic: Configured command might be absolute path, expected might be just 'node' or 'uvx'
+                        // If Factory uses Wrapper, expectedArgs[0] is the wrapper path.
+                        // If Factory uses UVX, expectedArgs contains the full arg list.
+
+                        // Simplest check: Compare the *Arguments* array if strictly equal
+                        if (args != null && expectedArgs != null)
                         {
-                             // Check if it's running src.main (common for local dev/offline mode)
-                             // args usually: run --directory "..." python -u -m src.main ...
-                             bool hasSrcMain = Array.Exists(args, a => a.Contains("src.main"));
-                             if (hasSrcMain)
+                             // Normalize paths for comparison (especially for wrapper.js)
+                             if (args.Length == expectedArgs.Length)
                              {
-                                 matches = true;
+                                 bool argsMatch = true;
+                                 for (int i = 0; i < args.Length; i++)
+                                 {
+                                     // Use loose path equality
+                                     if (!McpConfigurationHelper.PathsEqual(args[i], expectedArgs[i]) && 
+                                         !string.Equals(args[i], expectedArgs[i], StringComparison.OrdinalIgnoreCase))
+                                     {
+                                         argsMatch = false;
+                                         break;
+                                     }
+                                 }
+                                 if (argsMatch) matches = true;
                              }
                         }
                         
-                        // Check: Node Wrapper
-                        if (!matches && !string.IsNullOrEmpty(command) && args != null && args.Length > 0 && !string.IsNullOrEmpty(expectedWrapper))
-                        {
-                            try
-                            {
-                                if (Path.GetFileNameWithoutExtension(command).Equals("node", StringComparison.OrdinalIgnoreCase) &&
-                                    McpConfigurationHelper.PathsEqual(args[0], expectedWrapper))
-                                {
-                                    matches = true;
-                                }
-                            }
-                            catch (ArgumentException)
-                            {
-                                // Invalid command path, skip check
-                            }
-                        }
-                        
-                        // Check: UVX (Online Mode)
-                        if (!matches && args != null && args.Length > 0)
-                        {
-                            string expectedUvxUrl = AssetPathUtility.GetMcpServerGitUrl();
-                            string configuredUvxUrl = McpConfigurationHelper.ExtractUvxUrl(args);
-                            if (!string.IsNullOrEmpty(configuredUvxUrl) && !string.IsNullOrEmpty(expectedUvxUrl))
-                            {
-                                 matches = McpConfigurationHelper.PathsEqual(configuredUvxUrl, expectedUvxUrl);
-                            }
-                        }
+                        // Legacy / Flexible Checking (Keep some of the old logic if specific fallback needed? No, user wanted "Reforge")
+                        // The Factory represents the *Ideal State*. If config diverges, it IS Not Configured.
+                        // So we trust the Factory check above.
                     }
 
                 if (matches)
@@ -333,10 +322,24 @@ namespace MCPForUnity.Editor.Clients
                     }
                     else if (args != null && args.Length > 0)
                     {
-                        string expected = AssetPathUtility.GetMcpServerGitUrl();
-                        string configured = McpConfigurationHelper.ExtractUvxUrl(args);
-                        matches = !string.IsNullOrEmpty(configured) &&
-                                  McpConfigurationHelper.PathsEqual(configured, expected);
+                        // Check strict argument match against Factory
+                        // Note: Codex config is TOML, but parsed args should match our Factory output
+                        string[] expectedArgs = McpServerCommandLoader.GenerateJsonArgs(useHttp: false);
+                        
+                         if (args.Length == expectedArgs.Length)
+                         {
+                             bool argsMatch = true;
+                             for (int i = 0; i < args.Length; i++)
+                             {
+                                 if (!McpConfigurationHelper.PathsEqual(args[i], expectedArgs[i]) && 
+                                     !string.Equals(args[i], expectedArgs[i], StringComparison.OrdinalIgnoreCase))
+                                 {
+                                     argsMatch = false;
+                                     break;
+                                 }
+                             }
+                             if (argsMatch) matches = true;
+                         }
                     }
 
                     if (matches)

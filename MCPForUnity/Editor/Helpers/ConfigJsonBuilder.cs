@@ -78,55 +78,36 @@ namespace MCPForUnity.Editor.Helpers
             }
             else
             {
-                // Stdio mode: Use node wrapper.js (Recommended for Windows stability)
-                // This ensures we use the python fallback logic inside wrapper.js to prevent "invalid trailing data"
+                // Stdio mode: Use Loader to determine command/args
+                var cmdInfo = McpServerCommandLoader.GenerateCommand(useHttp: false);
+                var jsonArgs = McpServerCommandLoader.GenerateJsonArgs(useHttp: false);
                 
-                string wrapperPath = AssetPathUtility.GetWrapperJsPath();
-
-                if (string.IsNullOrEmpty(wrapperPath))
+                // Logic to set 'command' and 'args'
+                if (cmdInfo.IsNodeWrapper)
                 {
-                    // Fallback to uvx if wrapper not found
-                    var (uvxPath, fromUrl, packageName) = AssetPathUtility.GetUvxCommandParts();
-                    var toolArgs = BuildUvxArgs(fromUrl, packageName);
-    
+                    // Node Wrapper Mode
+                    unity["command"] = cmdInfo.Executable; // "node" or override
+                    unity["args"] = JArray.FromObject(jsonArgs); // [ "path/to/wrapper.js" ]
+                }
+                else
+                {
+                    // UVX Mode
+                    // Handle Windows Shim for Claude Desktop (legacy stability fix)
                     if (ShouldUseWindowsCmdShim(client))
                     {
                         unity["command"] = ResolveCmdPath();
-    
-                        var cmdArgs = new List<string> { "/c", uvxPath };
-                        cmdArgs.AddRange(toolArgs);
-    
+                        
+                        // Shim args: /c {uvxPath} {args...}
+                        var cmdArgs = new List<string> { "/c", cmdInfo.Executable }; 
+                        cmdArgs.AddRange(jsonArgs);
+                        
                         unity["args"] = JArray.FromObject(cmdArgs.ToArray());
                     }
                     else
                     {
-                        unity["command"] = uvxPath;
-                        unity["args"] = JArray.FromObject(toolArgs.ToArray());
+                        unity["command"] = cmdInfo.Executable; // "uvx" path
+                        unity["args"] = JArray.FromObject(jsonArgs);
                     }
-                }
-                else
-                {
-                    // Use node to run wrapper.js
-                    // We assume 'node' is in PATH unless overridden.
-                    string nodeCommand = "node";
-                    string nodeOverride = EditorPrefs.GetString(EditorPrefKeys.NodePathOverride, "");
-                    if (!string.IsNullOrEmpty(nodeOverride))
-                    {
-                        if (File.Exists(nodeOverride))
-                        {
-                            nodeCommand = nodeOverride;
-                        }
-                        else
-                        {
-                            McpLog.Warn($"Node override path not found: {nodeOverride}, falling back to 'node'");
-                        }
-                    }
-    
-                    unity["command"] = nodeCommand;
-                    
-                    var args = new List<string> { wrapperPath };
-                    
-                    unity["args"] = JArray.FromObject(args.ToArray());
                 }
 
                 // Remove url/serverUrl if they exist from previous config

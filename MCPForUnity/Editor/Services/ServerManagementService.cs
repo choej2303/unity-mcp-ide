@@ -220,57 +220,17 @@ namespace MCPForUnity.Editor.Services
         {
             // Check transport preference
             bool useHttp = EditorPrefs.GetBool(MCPForUnity.Editor.Constants.EditorPrefKeys.UseHttpTransport, true);
-
-            if (!useHttp)
-            {
-                // Usage 1: Stdio Mode
-                // Priority: Node.js wrapper (stable for Windows) > uvx (fallback)
-                
-                string wrapperPath = AssetPathUtility.GetWrapperJsPath();
-                if (!string.IsNullOrEmpty(wrapperPath))
-                {
-                    // Use node to run wrapper.js
-                    // We assume 'node' is in PATH unless overridden.
-                    string nodeCommand = "node";
-                    string nodeOverride = EditorPrefs.GetString(MCPForUnity.Editor.Constants.EditorPrefKeys.NodePathOverride, "");
-                    if (!string.IsNullOrEmpty(nodeOverride) && File.Exists(nodeOverride))
-                    {
-                        nodeCommand = nodeOverride;
-                    }
-                    
-                    // Wrap path in quotes if it contains spaces
-                    string safeWrapperPath = wrapperPath.Contains(" ") ? $"\"{wrapperPath}\"" : wrapperPath;
-                    command = $"{nodeCommand} {safeWrapperPath}";
-                    error = null;
-                    return true;
-                }
-            }
-
-            // Usage 2: HTTP Mode OR Stdio Fallback (uvx)
-            var (uvxPath, fromUrl, packageName) = AssetPathUtility.GetUvxCommandParts();
-            string uvPath = BuildUvPathFromUvx(uvxPath);
-            string port = HttpEndpointUtility.GetPort().ToString();
             
-            // Validate uvPath
-            if (string.IsNullOrEmpty(uvPath))
+            var info = McpServerCommandLoader.GenerateCommand(useHttp);
+            
+            if (!string.IsNullOrEmpty(info.Error))
             {
                 command = null;
-                error = "Could not locate 'uv' or 'uvx' executable. Please check your installation or Advanced Settings.";
+                error = info.Error;
                 return false;
             }
 
-            // Construct uvx command
-            string transportArgs = useHttp ? $"--transport sse --port {port}" : "--transport stdio";
-            
-            if (!string.IsNullOrEmpty(fromUrl))
-            {
-                 command = $"{uvxPath} --from {fromUrl} {packageName} {transportArgs}";
-            }
-            else 
-            {
-                command = $"{uvxPath} {packageName} {transportArgs}";
-            }
-
+            command = info.FullCommand;
             error = null;
             return true;
         }
