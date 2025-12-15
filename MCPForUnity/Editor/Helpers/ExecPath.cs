@@ -337,5 +337,116 @@ namespace MCPForUnity.Editor.Helpers
             catch { return null; }
         }
 #endif
+
+        /// <summary>
+        /// Creates a ProcessStartInfo for opening a terminal window with the given command
+        /// Works cross-platform: macOS, Windows, and Linux
+        /// </summary>
+        public static ProcessStartInfo CreateTerminalProcessStartInfo(string command, string pathPrepend = null)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                throw new ArgumentException("Command cannot be empty", nameof(command));
+
+            command = command.Replace("\r", "").Replace("\n", "");
+
+#if UNITY_EDITOR_OSX
+            // macOS: Use osascript directly to avoid shell metacharacter injection via bash
+            // Escape for AppleScript: backslash and double quotes
+            string escapedCommand = command.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            return new ProcessStartInfo
+            {
+                FileName = "/usr/bin/osascript",
+                Arguments = $"-e \"tell application \\\"Terminal\\\" to do script \\\"{escapedCommand}\\\" activate\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+#elif UNITY_EDITOR_WIN
+            // Windows: Use cmd.exe with start command to open new window
+            // Wrap in quotes for /k and escape internal quotes
+            string escapedCommandWin = command.Replace("\"", "\\\"");
+            var psi = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                // We need to inject PATH into the new cmd window.
+                // Since 'start' launches a separate process, we'll try to set PATH before running the command.
+                // Note: 'start' inherits environment variables, so setting them on this ProcessStartInfo should work.
+                Arguments = $"/c start \"MCP Server\" cmd.exe /k \"{escapedCommandWin}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            // Inject PATH
+            if (!string.IsNullOrEmpty(pathPrepend))
+            {
+                string currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+                psi.EnvironmentVariables["PATH"] = pathPrepend + Path.PathSeparator + currentPath;
+            }
+            return psi;
+#else
+            // Linux: Try common terminal emulators
+            // We use bash -c to execute the command, so we must properly quote/escape for bash
+            // Escape single quotes for the inner bash string
+            string escapedCommandLinux = command.Replace("'", "'\\''");
+            // Wrap the command in single quotes for bash -c
+            string script = $"'{escapedCommandLinux}; exec bash'";
+            // Escape double quotes for the outer Process argument string
+            string escapedScriptForArg = script.Replace("\"", "\\\"");
+            string bashCmdArgs = $"bash -c \"{escapedScriptForArg}\"";
+            
+            string[] terminals = { "gnome-terminal", "xterm", "konsole", "xfce4-terminal" };
+            string terminalCmd = null;
+            
+            foreach (var term in terminals)
+            {
+                try
+                {
+                    // Use 'which' to find the terminal emulator
+                    string found = null;
+#if UNITY_EDITOR_OSX || UNITY_EDITOR_LINUX
+                     found = Which(term, "/usr/bin:/bin:/usr/local/bin");
+#endif
+                    if (!string.IsNullOrEmpty(found))
+                    {
+                        terminalCmd = term;
+                        break;
+                    }
+                }
+                catch { }
+            }
+            
+            if (terminalCmd == null)
+            {
+                terminalCmd = "xterm"; // Fallback
+            }
+            
+            // Different terminals have different argument formats
+            string args;
+            if (terminalCmd == "gnome-terminal")
+            {
+                args = $"-- {bashCmdArgs}";
+            }
+            else if (terminalCmd == "konsole")
+            {
+                args = $"-e {bashCmdArgs}";
+            }
+            else if (terminalCmd == "xfce4-terminal")
+            {
+                // xfce4-terminal expects -e "command string" or -e command arg
+                args = $"--hold -e \"{bashCmdArgs.Replace("\"", "\\\"")}\"";
+            }
+            else // xterm and others
+            {
+                args = $"-hold -e {bashCmdArgs}";
+            }
+            
+            return new ProcessStartInfo
+            {
+                FileName = terminalCmd,
+                Arguments = args,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+#endif
+        }
     }
 }

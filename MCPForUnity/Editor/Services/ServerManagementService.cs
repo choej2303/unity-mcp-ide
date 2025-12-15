@@ -214,6 +214,103 @@ namespace MCPForUnity.Editor.Services
         }
 
         /// <summary>
+        /// Attempts to get the command that will be executed when starting the local server (HTTP or Stdio)
+        /// </summary>
+        public bool TryGetLocalHttpServerCommand(out string command, out string error)
+        {
+            // Check transport preference
+            bool useHttp = EditorPrefs.GetBool(MCPForUnity.Editor.Constants.EditorPrefKeys.UseHttpTransport, true);
+
+            if (!useHttp)
+            {
+                // Usage 1: Stdio Mode
+                // Priority: Node.js wrapper (stable for Windows) > uvx (fallback)
+                
+                string wrapperPath = AssetPathUtility.GetWrapperJsPath();
+                if (!string.IsNullOrEmpty(wrapperPath))
+                {
+                    // Use node to run wrapper.js
+                    // We assume 'node' is in PATH unless overridden.
+                    string nodeCommand = "node";
+                    string nodeOverride = EditorPrefs.GetString(MCPForUnity.Editor.Constants.EditorPrefKeys.NodePathOverride, "");
+                    if (!string.IsNullOrEmpty(nodeOverride) && File.Exists(nodeOverride))
+                    {
+                        nodeCommand = nodeOverride;
+                    }
+                    
+                    // Wrap path in quotes if it contains spaces
+                    string safeWrapperPath = wrapperPath.Contains(" ") ? $"\"{wrapperPath}\"" : wrapperPath;
+                    command = $"{nodeCommand} {safeWrapperPath}";
+                    error = null;
+                    return true;
+                }
+            }
+
+            // Usage 2: HTTP Mode OR Stdio Fallback (uvx)
+            var (uvxPath, fromUrl, packageName) = AssetPathUtility.GetUvxCommandParts();
+            string uvPath = BuildUvPathFromUvx(uvxPath);
+            string port = HttpEndpointUtility.GetPort().ToString();
+            
+            // Validate uvPath
+            if (string.IsNullOrEmpty(uvPath))
+            {
+                command = null;
+                error = "Could not locate 'uv' or 'uvx' executable. Please check your installation or Advanced Settings.";
+                return false;
+            }
+
+            // Construct uvx command
+            string transportArgs = useHttp ? $"--transport sse --port {port}" : "--transport stdio";
+            
+            if (!string.IsNullOrEmpty(fromUrl))
+            {
+                 command = $"{uvxPath} --from {fromUrl} {packageName} {transportArgs}";
+            }
+            else 
+            {
+                command = $"{uvxPath} {packageName} {transportArgs}";
+            }
+
+            error = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Check if the configured HTTP URL is a local address
+        /// </summary>
+        public bool IsLocalUrl()
+        {
+            return IsLocalUrl(HttpEndpointUtility.GetBaseUrl());
+        }
+
+        private bool IsLocalUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return false;
+            try
+            {
+                var uri = new Uri(url);
+                return uri.Host == "localhost" || uri.Host == "127.0.0.1";
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Check if the local HTTP server can be started
+        /// </summary>
+        public bool CanStartLocalServer()
+        {
+            // Must have HTTP transport enabled
+            bool useHttp = EditorPrefs.GetBool(MCPForUnity.Editor.Constants.EditorPrefKeys.UseHttpTransport, true);
+            if (!useHttp) return false;
+
+            // Must be configured for local URL
+            return IsLocalUrl();
+        }
+
+        /// <summary>
         /// Start the local HTTP server in a new terminal window.
         /// Stops any existing server on the port and clears the uvx cache first.
         /// </summary>
@@ -281,7 +378,7 @@ namespace MCPForUnity.Editor.Services
                     else
                     {
                         // Start the server in a new terminal window (cross-platform for Mac/Linux)
-                         startInfo = CreateTerminalProcessStartInfo(command);
+                         startInfo = ExecPath.CreateTerminalProcessStartInfo(command);
                     }
 
                     var process = System.Diagnostics.Process.Start(startInfo);
@@ -390,10 +487,10 @@ namespace MCPForUnity.Editor.Services
 
                 McpLog.Info($"Attempting to stop any process listening on local port {port}. This will terminate the owning process even if it is not the MCP server.");
 
-                int pid = GetProcessIdForPort(port);
+                int pid = NetworkHelper.GetProcessIdForPort(port);
                 if (pid > 0)
                 {
-                    KillProcess(pid);
+                    NetworkHelper.KillProcess(pid);
                     McpLog.Info($"Stopped local HTTP server on port {port} (PID: {pid})");
                     return true;
                 }
@@ -408,375 +505,6 @@ namespace MCPForUnity.Editor.Services
                 McpLog.Error($"Failed to stop server: {ex.Message}");
                 return false;
             }
-        }
-
-        private int GetProcessIdForPort(int port)
-        {
-            try
-            {
-                string stdout, stderr;
-                bool success;
-
-                if (Application.platform == RuntimePlatform.WindowsEditor)
-                {
-                    // netstat -ano | findstr :<port>
-                    success = ExecPath.TryRun("cmd.exe", $"/c netstat -ano | findstr :{port}", Application.dataPath, out stdout, out stderr);
-                    if (success && !string.IsNullOrEmpty(stdout))
-                    {
-                        var lines = stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                        foreach (var line in lines)
-                        {
-                            if (line.Contains("LISTENING"))
-                            {
-                                var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                                if (parts.Length > 0 && int.TryParse(parts[parts.Length - 1], out int pid))
-                                {
-                                    return pid;
-                                }
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    // lsof -i :<port> -t
-                    // Use /usr/sbin/lsof directly as it might not be in PATH for Unity
-                    string lsofPath = "/usr/sbin/lsof";
-                    if (!System.IO.File.Exists(lsofPath)) lsofPath = "lsof"; // Fallback
-
-                    success = ExecPath.TryRun(lsofPath, $"-i :{port} -t", Application.dataPath, out stdout, out stderr);
-                    if (success && !string.IsNullOrWhiteSpace(stdout))
-                    {
-                        var pidStrings = stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                        foreach (var pidString in pidStrings)
-                        {
-                            if (int.TryParse(pidString.Trim(), out int pid))
-                            {
-                                if (pidStrings.Length > 1)
-                                {
-                                    McpLog.Debug($"Multiple processes found on port {port}; attempting to stop PID {pid} returned by lsof -t.");
-                                }
-
-                                return pid;
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                McpLog.Warn($"Error checking port {port}: {ex.Message}");
-            }
-            return -1;
-        }
-
-        private void KillProcess(int pid)
-        {
-            try
-            {
-                string stdout, stderr;
-                if (Application.platform == RuntimePlatform.WindowsEditor)
-                {
-                    ExecPath.TryRun("taskkill", $"/F /PID {pid}", Application.dataPath, out stdout, out stderr);
-                }
-                else
-                {
-                    ExecPath.TryRun("kill", $"-9 {pid}", Application.dataPath, out stdout, out stderr);
-                }
-            }
-            catch (Exception ex)
-            {
-                McpLog.Error($"Error killing process {pid}: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Attempts to build the command used for starting the local HTTP server
-        /// </summary>
-        public bool TryGetLocalHttpServerCommand(out string command, out string error)
-        {
-            command = null;
-            error = null;
-
-            bool useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
-            // if (!useHttpTransport)
-            // {
-            //     error = "HTTP transport is disabled. Enable it in the MCP For Unity window first.";
-            //     return false;
-            // }
-
-            string httpUrl = HttpEndpointUtility.GetBaseUrl();
-            if (!IsLocalUrl())
-            {
-                error = $"The configured URL ({httpUrl}) is not a local address. Local server launch only works for localhost.";
-                return false;
-            }
-
-            var (uvxPath, fromUrl, packageName) = AssetPathUtility.GetUvxCommandParts();
-            
-            // NOTE: When running from local source (Server~), we should execute via python directly
-            // rather than uvx, because 'mcp-for-unity' package name won't be valid for uvx
-            // unless we install it. So we detect if we are running from a local path.
-            
-
-            // 2. FORCE LOCAL EXECUTION PRIORITY (Offline Mode)
-            // We first try to find the 'wrapper.js' or just the directory to confirm local presence.
-            // wrapper.js is in {packageRoot}/Server~/wrapper.js
-            string wrapperPath = AssetPathUtility.GetWrapperJsPath();
-            string serverSrcPath = null;
-            bool isLocalSource = false;
-
-            if (!string.IsNullOrEmpty(wrapperPath))
-            {
-                // Found wrapper.js, so the directory is the parent
-                serverSrcPath = Path.GetDirectoryName(wrapperPath);
-                isLocalSource = true;
-                McpLog.Info($"[Server Internalization] Found local server at: {serverSrcPath}");
-            }
-            else
-            {
-                 // Fallback: try manual check
-                 string packageRoot = AssetPathUtility.GetPackageAbsolutePath();
-                 if (!string.IsNullOrEmpty(packageRoot))
-                 {
-                     string checkPath = Path.Combine(packageRoot, "Server~");
-                     if (Directory.Exists(checkPath))
-                     {
-                         isLocalSource = true;
-                         serverSrcPath = checkPath;
-                         McpLog.Info($"[Server Internalization] Found local server directory (manual check): {serverSrcPath}");
-                     }
-                 }
-            }
-
-            if (isLocalSource && !string.IsNullOrEmpty(serverSrcPath))
-            {
-                 // Local execution mode:
-                 // uv run --directory "{serverSrcPath}" python -u -m src.main --transport http --http-url {httpUrl}
-                 // This ensures dependencies in pyproject.toml are respected and src module is found.
-                 
-                 string uvPath = BuildUvPathFromUvx(uvxPath);
-                 if (string.IsNullOrEmpty(uvPath)) uvPath = "uv"; // Fallback to PATH if empty
-
-                 // Fix: Ensure proper quoting for executable path if it has spaces
-                 string safeUvPath = uvPath.Contains(" ") && !uvPath.StartsWith("\"") ? $"\"{uvPath}\"" : uvPath;
-                 
-                 // Fix: Ensure directory path is clean and safe for quoting
-                 string safeSrcPath = serverSrcPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                 
-                 // Add -u flag to force unbuffered stdout/stderr, critical for SSE stability on Windows
-                 // Also explicitly use 'python' to ensure we use the venv's python
-                 string localTransportArg = useHttpTransport ? "--transport sse" : "--transport stdio";
-                 string httpArg = useHttpTransport ? $" --http-url {httpUrl}" : "";
-                 command = $"{safeUvPath} run --directory \"{safeSrcPath}\" python -u -m src.main {localTransportArg}{httpArg}";
-                 
-                 McpLog.Info($"[Server Internalization] Starting in Offline Mode using: {command}");
-                 return true;
-            }
-            
-            McpLog.Warn("[Server Internalization] Local server not found. Falling back to UVX (Online Mode).");
-
-            // Fallback to uvx (remote execution)
-            if (string.IsNullOrEmpty(uvxPath))
-            {
-                error = "uv is not installed or found in PATH. Install it or set an override in Advanced Settings.";
-                return false;
-            }
-
-            // Quote the path if it contains spaces and isn't already quoted
-            string finalUvxPath = uvxPath;
-            if (uvxPath.Contains(" ") && !uvxPath.StartsWith("\""))
-            {
-                finalUvxPath = $"\"{uvxPath}\"";
-            }
-
-            // Determine transport argument based on configuration
-            string transportArg = useHttpTransport ? "--transport sse" : "--transport stdio";
-
-            string args = string.IsNullOrEmpty(fromUrl)
-                ? $"{packageName} {transportArg}"
-                : $"--from {fromUrl} {packageName} {transportArg}";
-
-            if (useHttpTransport)
-            {
-                args += $" --http-url {httpUrl}";
-            }
-
-            command = $"{finalUvxPath} {args}";
-            return true;
-        }
-
-        /// <summary>
-        /// Check if the configured HTTP URL is a local address
-        /// </summary>
-        public bool IsLocalUrl()
-        {
-            string httpUrl = HttpEndpointUtility.GetBaseUrl();
-            return IsLocalUrl(httpUrl);
-        }
-
-        /// <summary>
-        /// Check if a URL is local (localhost, 127.0.0.1, 0.0.0.0)
-        /// </summary>
-        private static bool IsLocalUrl(string url)
-        {
-            if (string.IsNullOrEmpty(url)) return false;
-
-            try
-            {
-                var uri = new Uri(url);
-                string host = uri.Host.ToLowerInvariant();
-                return host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0" || host == "::1";
-            }
-            catch
-            {
-                // Fallback for simple localhost strings without scheme
-                if (url.StartsWith("localhost") || url.StartsWith("127.0.0.1")) return true;
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Check if the local HTTP server can be started
-        /// </summary>
-        public bool CanStartLocalServer()
-        {
-            bool useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
-            return useHttpTransport && IsLocalUrl();
-        }
-
-        /// <summary>
-        /// Creates a ProcessStartInfo for opening a terminal window with the given command
-        /// Works cross-platform: macOS, Windows, and Linux
-        /// </summary>
-        private System.Diagnostics.ProcessStartInfo CreateTerminalProcessStartInfo(string command)
-        {
-            if (string.IsNullOrWhiteSpace(command))
-                throw new ArgumentException("Command cannot be empty", nameof(command));
-
-            command = command.Replace("\r", "").Replace("\n", "");
-
-#if UNITY_EDITOR_OSX
-            // macOS: Use osascript directly to avoid shell metacharacter injection via bash
-            // Escape for AppleScript: backslash and double quotes
-            string escapedCommand = command.Replace("\\", "\\\\").Replace("\"", "\\\"");
-            return new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "/usr/bin/osascript",
-                Arguments = $"-e \"tell application \\\"Terminal\\\" to do script \\\"{escapedCommand}\\\" activate\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-#elif UNITY_EDITOR_WIN
-            // Windows: Use cmd.exe with start command to open new window
-            // Wrap in quotes for /k and escape internal quotes
-            string escapedCommandWin = command.Replace("\"", "\\\"");
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                // We need to inject PATH into the new cmd window.
-                // Since 'start' launches a separate process, we'll try to set PATH before running the command.
-                // Note: 'start' inherits environment variables, so setting them on this ProcessStartInfo should work.
-                Arguments = $"/c start \"MCP Server\" cmd.exe /k \"{escapedCommandWin}\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            // Inject PATH
-            string pathPrepend = GetPlatformSpecificPathPrepend();
-            if (!string.IsNullOrEmpty(pathPrepend))
-            {
-                string currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-                psi.EnvironmentVariables["PATH"] = pathPrepend + Path.PathSeparator + currentPath;
-            }
-            return psi;
-#else
-            // Linux: Try common terminal emulators
-            // We use bash -c to execute the command, so we must properly quote/escape for bash
-            // Escape single quotes for the inner bash string
-            string escapedCommandLinux = command.Replace("'", "'\\''");
-            // Wrap the command in single quotes for bash -c
-            string script = $"'{escapedCommandLinux}; exec bash'";
-            // Escape double quotes for the outer Process argument string
-            string escapedScriptForArg = script.Replace("\"", "\\\"");
-            string bashCmdArgs = $"bash -c \"{escapedScriptForArg}\"";
-            
-            string[] terminals = { "gnome-terminal", "xterm", "konsole", "xfce4-terminal" };
-            string terminalCmd = null;
-            
-            foreach (var term in terminals)
-            {
-                try
-                {
-                    using var which = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = "which",
-                        Arguments = term,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        CreateNoWindow = true
-                    });
-                    
-                    if (which != null)
-                    {
-                        if (!which.WaitForExit(5000))
-                        {
-                            // Timeout - kill the process
-                            try 
-                            { 
-                                if (!which.HasExited)
-                                {
-                                    which.Kill();
-                                }
-                            } 
-                            catch { }
-                        }
-                        else if (which.ExitCode == 0)
-                        {
-                            terminalCmd = term;
-                            break;
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    McpLog.Debug($"Terminal check failed for {term}: {ex.Message}");
-                }
-            }
-            
-            if (terminalCmd == null)
-            {
-                terminalCmd = "xterm"; // Fallback
-            }
-            
-            // Different terminals have different argument formats
-            string args;
-            if (terminalCmd == "gnome-terminal")
-            {
-                args = $"-- {bashCmdArgs}";
-            }
-            else if (terminalCmd == "konsole")
-            {
-                args = $"-e {bashCmdArgs}";
-            }
-            else if (terminalCmd == "xfce4-terminal")
-            {
-                // xfce4-terminal expects -e "command string" or -e command arg
-                args = $"--hold -e \"{bashCmdArgs.Replace("\"", "\\\"")}\"";
-            }
-            else // xterm and others
-            {
-                args = $"-hold -e {bashCmdArgs}";
-            }
-            
-            return new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = terminalCmd,
-                Arguments = args,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-#endif
         }
     }
 }

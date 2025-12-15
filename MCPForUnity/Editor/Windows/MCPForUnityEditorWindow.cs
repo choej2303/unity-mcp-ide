@@ -279,18 +279,35 @@ namespace MCPForUnity.Editor.Windows
 
         private void OnEnable()
         {
-            EditorApplication.update += OnEditorUpdate;
+            // EditorApplication.update += OnEditorUpdate; // Removed for optimization: UI Toolkit scheduler handles updates
             OpenWindows.Add(this);
             
             // Ensure ConsoleSync is running
             // var _ = MCPServiceLocator.ConsoleSync; // Disabled per user request
+            
+             // Initial updates - Use delayCall to prevent freezing during window creation
+            EditorApplication.delayCall += () => 
+            {
+                CheckSystemStatus(); // Single initial check after window loads
+                RefreshAllData();    // Ensure client config and other data are also refreshed immediately
+            };
         }
 
         private void OnDisable()
         {
-            EditorApplication.update -= OnEditorUpdate;
+            // EditorApplication.update -= OnEditorUpdate; // Removed for optimization
             OpenWindows.Remove(this);
+            
+            // Dispose of services that need cleanup
+            // if (MCPServiceLocator.IsInitialized)
+            // {
+            //     // We don't necessarily want to kill the server when the window closes,
+            //     // but we might want to stop listening to events
+            // }
         }
+
+        // Removed OnEditorUpdate() as it was redundantly calling UpdateConnectionStatus()
+        // McpConnectionSection now handles its own scheduling via schedule.Execute().
 
         private void OnFocus()
         {
@@ -306,14 +323,6 @@ namespace MCPForUnity.Editor.Windows
                 _lastFocusRefreshTime = currentTime;
                 RefreshAllData();
             }
-        }
-
-        private void OnEditorUpdate()
-        {
-            if (rootVisualElement == null || rootVisualElement.childCount == 0)
-                return;
-
-            connectionSection?.UpdateConnectionStatus();
         }
 
         private void ToggleSetup()

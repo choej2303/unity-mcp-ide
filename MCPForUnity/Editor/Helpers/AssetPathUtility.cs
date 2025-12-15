@@ -34,6 +34,14 @@ namespace MCPForUnity.Editor.Helpers
         }
 
         /// <summary>
+        /// Converts a path to Posix style (forward slashes).
+        /// </summary>
+        public static string ToPosixPath(string path)
+        {
+            return string.IsNullOrEmpty(path) ? path : path.Replace("\\", "/");
+        }
+
+        /// <summary>
         /// Gets the absolute file system path to the package root.
         /// Uses StackTrace/ScriptableObject trick to resolve real path (bypassing PackageCache if symlinked).
         /// </summary>
@@ -48,7 +56,7 @@ namespace MCPForUnity.Editor.Helpers
                 {
                     // Current file: .../MCPForUnity/Editor/Helpers/AssetPathUtility.cs
                     // We need: .../MCPForUnity
-                    return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(scriptFilePath), "..", ".."));
+                    return ToPosixPath(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(scriptFilePath), "..", "..")));
                 }
             }
             catch (Exception ex)
@@ -63,7 +71,7 @@ namespace MCPForUnity.Editor.Helpers
             // If it's already an absolute path, we're good
             if (Path.IsPathRooted(packageRoot))
             {
-                return packageRoot;
+                return ToPosixPath(packageRoot);
             }
 
             // If it's a virtual path (Packages/...), resolve it to physical path
@@ -72,20 +80,20 @@ namespace MCPForUnity.Editor.Helpers
                 var packageInfo = PackageInfo.FindForAssembly(typeof(AssetPathUtility).Assembly);
                 if (packageInfo != null && !string.IsNullOrEmpty(packageInfo.resolvedPath))
                 {
-                    return packageInfo.resolvedPath;
+                    return ToPosixPath(packageInfo.resolvedPath);
                 }
                 
                 // If resolvedPath is failing but we have assetPath, try Path.GetFullPath
                 // Note: This rarely works for Library/PackageCache, but worth a shot for local tarballs
-                return Path.GetFullPath(packageRoot);
+                return ToPosixPath(Path.GetFullPath(packageRoot));
             }
             else if (packageRoot.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
             {
                 string relativePath = packageRoot.Substring("Assets/".Length);
-                return Path.Combine(Application.dataPath, relativePath);
+                return ToPosixPath(Path.Combine(Application.dataPath, relativePath));
             }
             
-            return Path.GetFullPath(packageRoot);
+            return ToPosixPath(Path.GetFullPath(packageRoot));
         }
 
         private static string GetCallerFilePath([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
@@ -136,14 +144,14 @@ namespace MCPForUnity.Editor.Helpers
 
             if (File.Exists(wrapperPath))
             {
-                return wrapperPath;
+                return ToPosixPath(wrapperPath);
             }
             
             // Also check without the ~ just in case
             string wrapperPathNoTilde = Path.Combine(Path.GetDirectoryName(wrapperPath), "..", "Server", "wrapper.js");
             if (File.Exists(wrapperPathNoTilde))
             {
-                return Path.GetFullPath(wrapperPathNoTilde);
+                return ToPosixPath(Path.GetFullPath(wrapperPathNoTilde));
             }
 
             return null;
@@ -162,7 +170,7 @@ namespace MCPForUnity.Editor.Helpers
                 var packageInfo = PackageInfo.FindForAssembly(typeof(AssetPathUtility).Assembly);
                 if (packageInfo != null && !string.IsNullOrEmpty(packageInfo.assetPath))
                 {
-                    return packageInfo.assetPath;
+                    return ToPosixPath(packageInfo.assetPath);
                 }
 
                 // Fallback to AssetDatabase for Asset Store installs (Assets/MCPForUnity)
@@ -182,7 +190,7 @@ namespace MCPForUnity.Editor.Helpers
 
                 if (editorIndex >= 0)
                 {
-                    return scriptPath.Substring(0, editorIndex);
+                    return ToPosixPath(scriptPath.Substring(0, editorIndex));
                 }
 
                 McpLog.Warn($"Could not determine package root from script path: {scriptPath}");
@@ -276,14 +284,14 @@ namespace MCPForUnity.Editor.Helpers
                 string serverPathTilde = Path.Combine(packageRoot, "Server~");
                 if (Directory.Exists(serverPathTilde))
                 {
-                    // Return absolute path for uv to use directly
-                    return serverPathTilde;
+                    // Return absolute path for uv to use directly (ensure posix)
+                    return ToPosixPath(serverPathTilde);
                 }
 
                 string serverPath = Path.Combine(packageRoot, "Server");
                 if (Directory.Exists(serverPath))
                 {
-                    return serverPath;
+                    return ToPosixPath(serverPath);
                 }
             }
 

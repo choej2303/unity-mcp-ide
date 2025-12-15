@@ -87,5 +87,19 @@ namespace MCPForUnity.Editor.Helpers
         {
             return $"{baseUrl.TrimEnd('/')}/{segment}";
         }
+
+        /// <summary>
+        /// Extracts the port from the currently configured base URL.
+        /// Returns 8080 (default) if parsing fails.
+        /// </summary>
+        public static int GetPort()
+        {
+            string url = GetBaseUrl();
+            if (Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+            {
+                return uri.Port;
+            }
+            return 8080;
+        }
     }
 }
