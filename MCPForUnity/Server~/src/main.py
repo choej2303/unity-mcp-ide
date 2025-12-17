@@ -38,8 +38,12 @@ logger = logging.getLogger("mcp-for-unity-server")
 
 # Also write logs to a rotating file so logs are available when launched via stdio
 try:
-    _log_dir = os.path.join(os.path.expanduser(
-        "~/Library/Application Support/UnityMCP"), "Logs")
+    if os.name == 'nt':
+        _base_dir = os.environ.get('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
+        _log_dir = os.path.join(_base_dir, "UnityMCP", "Logs")
+    else:
+        _log_dir = os.path.join(os.path.expanduser(
+            "~/Library/Application Support/UnityMCP"), "Logs")
     os.makedirs(_log_dir, exist_ok=True)
     _file_path = os.path.join(_log_dir, "unity_mcp_server.log")
     _fh = RotatingFileHandler(
@@ -378,8 +382,11 @@ Examples:
     # Allow individual host/port to override URL components
     http_host = args.http_host or os.environ.get(
         "UNITY_MCP_HTTP_HOST") or parsed_url.hostname or "localhost"
-    http_port = args.http_port or (int(os.environ.get("UNITY_MCP_HTTP_PORT")) if os.environ.get(
-        "UNITY_MCP_HTTP_PORT") else None) or parsed_url.port or 8080
+    # Parse HTTP port safely
+    env_port = os.environ.get("UNITY_MCP_HTTP_PORT")
+    parsed_port = int(env_port) if env_port else None
+    
+    http_port = args.http_port or parsed_port or parsed_url.port or 8080
 
     os.environ["UNITY_MCP_HTTP_HOST"] = http_host
     os.environ["UNITY_MCP_HTTP_PORT"] = str(http_port)
@@ -400,8 +407,12 @@ Examples:
         parsed_url = urlparse(http_url)
         host = args.http_host or os.environ.get(
             "UNITY_MCP_HTTP_HOST") or parsed_url.hostname or "localhost"
-        port = args.http_port or (int(os.environ.get("UNITY_MCP_HTTP_PORT")) if os.environ.get(
-            "UNITY_MCP_HTTP_PORT") else None) or parsed_url.port or 8080
+        
+        # Safe port parsing for transport logic
+        env_port_t = os.environ.get("UNITY_MCP_HTTP_PORT")
+        env_port_val = int(env_port_t) if env_port_t else None
+        
+        port = args.http_port or env_port_val or parsed_url.port or 8080
             
         logger.info(f"Starting FastMCP with SSE transport on {host}:{port}")
         mcp.run(transport=transport, host=host, port=port)

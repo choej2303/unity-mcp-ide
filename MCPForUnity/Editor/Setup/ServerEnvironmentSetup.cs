@@ -18,7 +18,6 @@ namespace MCPForUnity.Editor.Setup
     {
         public static string ServerRoot => Path.Combine(AssetPathUtility.GetPackageAbsolutePath(), "Server~");
         public static string VenvPath => Path.Combine(ServerRoot, ".venv");
-        public static string RequirementsPath => Path.Combine(ServerRoot, "Server", "requirements.txt");
         
         private const string UV_VERSION = "0.5.11";
 

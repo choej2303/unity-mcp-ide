@@ -20,12 +20,12 @@ RUN pip install uv
 
 COPY . /app
 
-WORKDIR /app/Server
+WORKDIR /app
 
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8080
 
-ENV PYTHONPATH=/app/Server/src
+ENV PYTHONPATH=/app
 
 CMD ["uv", "run", "python", "src/main.py", "--transport", "http", "--http-host", "0.0.0.0", "--http-port", "8080"]

@@ -3,11 +3,11 @@ version: "3.9"
 services:
   unity-mcp-server:
     build:
-      context: .
-      dockerfile: Server/Dockerfile
+      context: MCPForUnity/Server~
+      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     restart: unless-stopped
     environment:
-      - PYTHONPATH=/app/Server/src
+      - PYTHONPATH=/app
     command: ["uv", "run", "python", "src/main.py", "--transport", "http", "--http-host", "0.0.0.0", "--http-port", "8080"]
