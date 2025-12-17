@@ -8,18 +8,9 @@ using UnityEditor;
 using UnityEngine;
 using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Editor.Services; // Added Service namespace
 using System.Threading;
 using System.Security.Cryptography;
-
-#if USE_ROSLYN
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.Formatting;
-#endif
-
-#if UNITY_EDITOR
-using UnityEditor.Compilation;
-#endif
 
 
 namespace MCPForUnity.Editor.Tools
@@ -58,66 +49,7 @@ namespace MCPForUnity.Editor.Tools
         /// Resolves a directory under Assets/, preventing traversal and escaping.
         /// Returns fullPathDir on disk and canonical 'Assets/...' relative path.
         /// </summary>
-        private static bool TryResolveUnderAssets(string relDir, out string fullPathDir, out string relPathSafe)
-        {
-            string assets = Application.dataPath.Replace('\\', '/');
 
-            // Normalize caller path: allow both "Scripts/..." and "Assets/Scripts/..."
-            string rel = (relDir ?? "Scripts").Replace('\\', '/').Trim();
-            if (string.IsNullOrEmpty(rel)) rel = "Scripts";
-
-            // Handle both "Assets" and "Assets/" prefixes
-            if (rel.Equals("Assets", StringComparison.OrdinalIgnoreCase))
-            {
-                rel = string.Empty;
-            }
-            else if (rel.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
-            {
-                rel = rel.Substring(7);
-            }
-
-            rel = rel.TrimStart('/');
-
-            string targetDir = Path.Combine(assets, rel).Replace('\\', '/');
-            string full = Path.GetFullPath(targetDir).Replace('\\', '/');
-
-            bool underAssets = full.StartsWith(assets + "/", StringComparison.OrdinalIgnoreCase)
-                               || string.Equals(full, assets, StringComparison.OrdinalIgnoreCase);
-            if (!underAssets)
-            {
-                fullPathDir = null;
-                relPathSafe = null;
-                return false;
-            }
-
-            // Best-effort symlink guard: if the directory OR ANY ANCESTOR (up to Assets/) is a reparse point/symlink, reject
-            try
-            {
-                var di = new DirectoryInfo(full);
-                while (di != null)
-                {
-                    if (di.Exists && (di.Attributes & FileAttributes.ReparsePoint) != 0)
-                    {
-                        fullPathDir = null;
-                        relPathSafe = null;
-                        return false;
-                    }
-                    var atAssets = string.Equals(
-                        di.FullName.Replace('\\', '/'),
-                        assets,
-                        StringComparison.OrdinalIgnoreCase
-                    );
-                    if (atAssets) break;
-                    di = di.Parent;
-                }
-            }
-            catch { /* best effort; proceed */ }
-
-            fullPathDir = full;
-            string tail = full.Length > assets.Length ? full.Substring(assets.Length).TrimStart('/') : string.Empty;
-            relPathSafe = ("Assets/" + tail).TrimEnd('/');
-            return true;
-        }
         /// <summary>
         /// Main handler for script management actions.
         /// </summary>
@@ -174,7 +106,7 @@ namespace MCPForUnity.Editor.Tools
             }
 
             // Resolve and harden target directory under Assets/
-            if (!TryResolveUnderAssets(path, out string fullPathDir, out string relPathSafeDir))
+            if (!ScriptService.TryResolveUnderAssets(path, out string fullPathDir, out string relPathSafeDir))
             {
                 return new ErrorResponse($"Invalid path. Target directory must be within 'Assets/'. Provided: '{(path ?? "(null)")}'");
             }
@@ -243,7 +175,7 @@ namespace MCPForUnity.Editor.Tools
                         try { fileText = File.ReadAllText(fullPath); }
                         catch (Exception ex) { return new ErrorResponse($"Failed to read script: {ex.Message}"); }
 
-                        bool ok = ValidateScriptSyntax(fileText, chosen, out string[] diagsRaw);
+                        bool ok = ValidationService.ValidateScriptSyntax(fileText, chosen, out string[] diagsRaw);
                         var diags = (diagsRaw ?? Array.Empty<string>()).Select(s =>
                         {
                             var m = Regex.Match(
@@ -275,7 +207,7 @@ namespace MCPForUnity.Editor.Tools
                                 return new ErrorResponse($"Script not found at '{relativePath}'.");
 
                             string text = File.ReadAllText(fullPath);
-                            string sha = ComputeSha256(text);
+                            string sha = CodeEditingService.ComputeSha256(text);
                             var fi = new FileInfo(fullPath);
                             long lengthBytes;
                             try { lengthBytes = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetByteCount(text); }
@@ -345,7 +277,7 @@ namespace MCPForUnity.Editor.Tools
 
             // Validate syntax with detailed error reporting using GUI setting
             ValidationLevel validationLevel = GetValidationLevelFromGUI();
-            bool isValid = ValidateScriptSyntax(contents, validationLevel, out string[] validationErrors);
+            bool isValid = ValidationService.ValidateScriptSyntax(contents, validationLevel, out string[] validationErrors);
             if (!isValid)
             {
                 return new ErrorResponse("validation_failed", new { status = "validation_failed", diagnostics = validationErrors ?? Array.Empty<string>() });
@@ -443,7 +375,7 @@ namespace MCPForUnity.Editor.Tools
 
             // Validate syntax with detailed error reporting using GUI setting
             ValidationLevel validationLevel = GetValidationLevelFromGUI();
-            bool isValid = ValidateScriptSyntax(contents, validationLevel, out string[] validationErrors);
+            bool isValid = ValidationService.ValidateScriptSyntax(contents, validationLevel, out string[] validationErrors);
             if (!isValid)
             {
                 return new ErrorResponse("validation_failed", new { status = "validation_failed", diagnostics = validationErrors ?? Array.Empty<string>() });
@@ -537,7 +469,7 @@ namespace MCPForUnity.Editor.Tools
             catch (Exception ex) { return new ErrorResponse($"Failed to read script: {ex.Message}"); }
 
             // Require precondition to avoid drift on large files
-            string currentSha = ComputeSha256(original);
+            string currentSha = CodeEditingService.ComputeSha256(original);
             if (string.IsNullOrEmpty(preconditionSha256))
                 return new ErrorResponse("precondition_required", new { status = "precondition_required", current_sha256 = currentSha });
             if (!preconditionSha256.Equals(currentSha, StringComparison.OrdinalIgnoreCase))
@@ -556,9 +488,9 @@ namespace MCPForUnity.Editor.Tools
                     int ec = Math.Max(1, e.Value<int>("endCol"));
                     string newText = e.Value<string>("newText") ?? string.Empty;
 
-                    if (!TryIndexFromLineCol(original, sl, sc, out int sidx))
+                    if (!CodeEditingService.TryIndexFromLineCol(original, sl, sc, out int sidx))
                         return new ErrorResponse($"apply_text_edits: start out of range (line {sl}, col {sc})");
-                    if (!TryIndexFromLineCol(original, el, ec, out int eidx))
+                    if (!CodeEditingService.TryIndexFromLineCol(original, el, ec, out int eidx))
                         return new ErrorResponse($"apply_text_edits: end out of range (line {el}, col {ec})");
                     if (eidx < sidx) (sidx, eidx) = (eidx, sidx);
 
@@ -688,7 +620,7 @@ namespace MCPForUnity.Editor.Tools
                     int originalLength = sp.end - sp.start;
                     int newLength = sp.text?.Length ?? 0;
                     int endPos = sp.start + newLength;
-                    if (!CheckScopedBalance(next, Math.Max(0, sp.start - 500), Math.Min(next.Length, endPos + 500)))
+                    if (!CodeEditingService.CheckScopedBalance(next, Math.Max(0, sp.start - 500), Math.Min(next.Length, endPos + 500)))
                     {
                         return new ErrorResponse("unbalanced_braces", new { status = "unbalanced_braces", line = 0, expected = "{}()[] (scoped)", hint = "Use standard validation or shrink the edit range." });
                     }
@@ -699,7 +631,7 @@ namespace MCPForUnity.Editor.Tools
             // No-op guard: if resulting text is identical, avoid writes and return explicit no-op
             if (string.Equals(working, original, StringComparison.Ordinal))
             {
-                string noChangeSha = ComputeSha256(original);
+                string noChangeSha = CodeEditingService.ComputeSha256(original);
                 return new SuccessResponse(
                     $"No-op: contents unchanged for '{relativePath}'.",
                     new
@@ -715,7 +647,7 @@ namespace MCPForUnity.Editor.Tools
             }
 
             // Always check final structural balance regardless of relaxed mode
-            if (!CheckBalancedDelimiters(working, out int line, out char expected))
+            if (!CodeEditingService.CheckBalancedDelimiters(working, out int line, out char expected))
             {
                 int startLine = Math.Max(1, line - 5);
                 int endLine = line + 5;
@@ -723,38 +655,31 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse(hint, new { status = "unbalanced_braces", line, expected = expected.ToString(), evidenceWindow = new { startLine, endLine } });
             }
 
-#if USE_ROSLYN
+        #if USE_ROSLYN
             if (!syntaxOnly)
             {
-                var tree = CSharpSyntaxTree.ParseText(working);
-                var diagnostics = tree.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Take(3)
-                    .Select(d => new {
-                        line = d.Location.GetLineSpan().StartLinePosition.Line + 1,
-                        col = d.Location.GetLineSpan().StartLinePosition.Character + 1,
-                        code = d.Id,
-                        message = d.GetMessage()
-                    }).ToArray();
-                if (diagnostics.Length > 0)
+                var roslynDiags = RoslynService.GetSyntaxDiagnostics(working);
+                if (roslynDiags.Count > 0)
                 {
-                    int firstLine = diagnostics[0].line;
+                    int firstLine = roslynDiags[0].Line;
                     int startLineRos = Math.Max(1, firstLine - 5);
                     int endLineRos = firstLine + 5;
+                    var diagnostics = roslynDiags.Select(d => new {
+                        line = d.Line,
+                        col = d.Col,
+                        code = d.Code,
+                        message = d.Message
+                    }).ToArray();
+                    
                     return new ErrorResponse("syntax_error", new { status = "syntax_error", diagnostics, evidenceWindow = new { startLine = startLineRos, endLine = endLineRos } });
                 }
 
                 // Optional formatting
-                try
-                {
-                    var root = tree.GetRoot();
-                    var workspace = new AdhocWorkspace();
-                    root = Microsoft.CodeAnalysis.Formatting.Formatter.Format(root, workspace);
-                    working = root.ToFullString();
-                }
-                catch { }
+                working = RoslynService.FormatCode(working);
             }
-#endif
+        #endif
 
-            string newSha = ComputeSha256(working);
+            string newSha = CodeEditingService.ComputeSha256(working);
 
             // Atomic write and schedule refresh
             try
@@ -819,151 +744,9 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static bool TryIndexFromLineCol(string text, int line1, int col1, out int index)
-        {
-            // 1-based line/col to absolute index (0-based), col positions are counted in code points
-            int line = 1, col = 1;
-            for (int i = 0; i <= text.Length; i++)
-            {
-                if (line == line1 && col == col1)
-                {
-                    index = i;
-                    return true;
-                }
-                if (i == text.Length) break;
-                char c = text[i];
-                if (c == '\r')
-                {
-                    // Treat CRLF as a single newline; skip the LF if present
-                    if (i + 1 < text.Length && text[i + 1] == '\n')
-                        i++;
-                    line++;
-                    col = 1;
-                }
-                else if (c == '\n')
-                {
-                    line++;
-                    col = 1;
-                }
-                else
-                {
-                    col++;
-                }
-            }
-            index = -1;
-            return false;
-        }
 
-        private static string ComputeSha256(string contents)
-        {
-            using (var sha = SHA256.Create())
-            {
-                var bytes = System.Text.Encoding.UTF8.GetBytes(contents);
-                var hash = sha.ComputeHash(bytes);
-                return BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
-            }
-        }
 
-        private static bool CheckBalancedDelimiters(string text, out int line, out char expected)
-        {
-            var braceStack = new Stack<int>();
-            var parenStack = new Stack<int>();
-            var bracketStack = new Stack<int>();
-            bool inString = false, inChar = false, inSingle = false, inMulti = false, escape = false;
-            line = 1; expected = '\0';
 
-            for (int i = 0; i < text.Length; i++)
-            {
-                char c = text[i];
-                char next = i + 1 < text.Length ? text[i + 1] : '\0';
-
-                if (c == '\n') { line++; if (inSingle) inSingle = false; }
-
-                if (escape) { escape = false; continue; }
-
-                if (inString)
-                {
-                    if (c == '\\') { escape = true; }
-                    else if (c == '"') inString = false;
-                    continue;
-                }
-                if (inChar)
-                {
-                    if (c == '\\') { escape = true; }
-                    else if (c == '\'') inChar = false;
-                    continue;
-                }
-                if (inSingle) continue;
-                if (inMulti)
-                {
-                    if (c == '*' && next == '/') { inMulti = false; i++; }
-                    continue;
-                }
-
-                if (c == '"') { inString = true; continue; }
-                if (c == '\'') { inChar = true; continue; }
-                if (c == '/' && next == '/') { inSingle = true; i++; continue; }
-                if (c == '/' && next == '*') { inMulti = true; i++; continue; }
-
-                switch (c)
-                {
-                    case '{': braceStack.Push(line); break;
-                    case '}':
-                        if (braceStack.Count == 0) { expected = '{'; return false; }
-                        braceStack.Pop();
-                        break;
-                    case '(': parenStack.Push(line); break;
-                    case ')':
-                        if (parenStack.Count == 0) { expected = '('; return false; }
-                        parenStack.Pop();
-                        break;
-                    case '[': bracketStack.Push(line); break;
-                    case ']':
-                        if (bracketStack.Count == 0) { expected = '['; return false; }
-                        bracketStack.Pop();
-                        break;
-                }
-            }
-
-            if (braceStack.Count > 0) { line = braceStack.Peek(); expected = '}'; return false; }
-            if (parenStack.Count > 0) { line = parenStack.Peek(); expected = ')'; return false; }
-            if (bracketStack.Count > 0) { line = bracketStack.Peek(); expected = ']'; return false; }
-
-            return true;
-        }
-
-        // Lightweight scoped balance: checks delimiters within a substring, ignoring outer context
-        private static bool CheckScopedBalance(string text, int start, int end)
-        {
-            start = Math.Max(0, Math.Min(text.Length, start));
-            end = Math.Max(start, Math.Min(text.Length, end));
-            int brace = 0, paren = 0, bracket = 0;
-            bool inStr = false, inChr = false, esc = false;
-            for (int i = start; i < end; i++)
-            {
-                char c = text[i];
-                char n = (i + 1 < end) ? text[i + 1] : '\0';
-                if (inStr)
-                {
-                    if (!esc && c == '"') inStr = false; esc = (!esc && c == '\\'); continue;
-                }
-                if (inChr)
-                {
-                    if (!esc && c == '\'') inChr = false; esc = (!esc && c == '\\'); continue;
-                }
-                if (c == '"') { inStr = true; esc = false; continue; }
-                if (c == '\'') { inChr = true; esc = false; continue; }
-                if (c == '/' && n == '/') { while (i < end && text[i] != '\n') i++; continue; }
-                if (c == '/' && n == '*') { i += 2; while (i + 1 < end && !(text[i] == '*' && text[i + 1] == '/')) i++; i++; continue; }
-                if (c == '{') brace++;
-                else if (c == '}') brace--;
-                else if (c == '(') paren++;
-                else if (c == ')') paren--;
-                else if (c == '[') bracket++; else if (c == ']') bracket--;
-                // Allow temporary negative balance - will check tolerance at end
-            }
-            return brace >= -3 && paren >= -3 && bracket >= -3; // tolerate more context from outside region
-        }
 
         private static object DeleteScript(string fullPath, string relativePath)
         {
@@ -2107,454 +1890,6 @@ namespace MCPForUnity.Editor.Tools
                 if (inStringLiteral || inCharLiteral)
                     continue;
 
-                // Count brackets and braces
-                switch (c)
-                {
-                    case '{': braceBalance++; break;
-                    case '}': braceBalance--; break;
-                    case '(': parenBalance++; break;
-                    case ')': parenBalance--; break;
-                    case '[': bracketBalance++; break;
-                    case ']': bracketBalance--; break;
-                }
-
-                // Check for negative balances (closing without opening)
-                if (braceBalance < 0)
-                {
-                    errors.Add("ERROR: Unmatched closing brace '}'");
-                    isValid = false;
-                }
-                if (parenBalance < 0)
-                {
-                    errors.Add("ERROR: Unmatched closing parenthesis ')'");
-                    isValid = false;
-                }
-                if (bracketBalance < 0)
-                {
-                    errors.Add("ERROR: Unmatched closing bracket ']'");
-                    isValid = false;
-                }
-            }
-
-            // Check final balances
-            if (braceBalance != 0)
-            {
-                errors.Add($"ERROR: Unbalanced braces (difference: {braceBalance})");
-                isValid = false;
-            }
-            if (parenBalance != 0)
-            {
-                errors.Add($"ERROR: Unbalanced parentheses (difference: {parenBalance})");
-                isValid = false;
-            }
-            if (bracketBalance != 0)
-            {
-                errors.Add($"ERROR: Unbalanced brackets (difference: {bracketBalance})");
-                isValid = false;
-            }
-            if (inStringLiteral)
-            {
-                errors.Add("ERROR: Unterminated string literal");
-                isValid = false;
-            }
-            if (inCharLiteral)
-            {
-                errors.Add("ERROR: Unterminated character literal");
-                isValid = false;
-            }
-            if (inMultiLineComment)
-            {
-                errors.Add("WARNING: Unterminated multi-line comment");
-            }
-
-            return isValid;
-        }
-
-#if USE_ROSLYN
-        /// <summary>
-        /// Cached compilation references for performance
-        /// </summary>
-        private static System.Collections.Generic.List<MetadataReference> _cachedReferences = null;
-        private static DateTime _cacheTime = DateTime.MinValue;
-        private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(5);
-
-        /// <summary>
-        /// Validates syntax using Roslyn compiler services
-        /// </summary>
-        private static bool ValidateScriptSyntaxRoslyn(string contents, ValidationLevel level, System.Collections.Generic.List<string> errors)
-        {
-            try
-            {
-                var syntaxTree = CSharpSyntaxTree.ParseText(contents);
-                var diagnostics = syntaxTree.GetDiagnostics();
-                
-                bool hasErrors = false;
-                foreach (var diagnostic in diagnostics)
-                {
-                    string severity = diagnostic.Severity.ToString().ToUpper();
-                    string message = $"{severity}: {diagnostic.GetMessage()}";
-                    
-                    if (diagnostic.Severity == DiagnosticSeverity.Error)
-                    {
-                        hasErrors = true;
-                    }
-                    
-                    // Include warnings in comprehensive mode
-                    if (level >= ValidationLevel.Standard || diagnostic.Severity == DiagnosticSeverity.Error) //Also use Standard for now
-                    {
-                        var location = diagnostic.Location.GetLineSpan();
-                        if (location.IsValid)
-                        {
-                            message += $" (Line {location.StartLinePosition.Line + 1})";
-                        }
-                        errors.Add(message);
-                    }
-                }
-                
-                return !hasErrors;
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"ERROR: Roslyn validation failed: {ex.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Validates script semantics using full compilation context to catch namespace, type, and method resolution errors
-        /// </summary>
-        private static bool ValidateScriptSemantics(string contents, System.Collections.Generic.List<string> errors)
-        {
-            try
-            {
-                // Get compilation references with caching
-                var references = GetCompilationReferences();
-                if (references == null || references.Count == 0)
-                {
-                    errors.Add("WARNING: Could not load compilation references for semantic validation");
-                    return true; // Don't fail if we can't get references
-                }
-
-                // Create syntax tree
-                var syntaxTree = CSharpSyntaxTree.ParseText(contents);
-
-                // Create compilation with full context
-                var compilation = CSharpCompilation.Create(
-                    "TempValidation",
-                    new[] { syntaxTree },
-                    references,
-                    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-                );
-
-                // Get semantic diagnostics - this catches all the issues you mentioned!
-                var diagnostics = compilation.GetDiagnostics();
-                
-                bool hasErrors = false;
-                foreach (var diagnostic in diagnostics)
-                {
-                    if (diagnostic.Severity == DiagnosticSeverity.Error)
-                    {
-                        hasErrors = true;
-                        var location = diagnostic.Location.GetLineSpan();
-                        string locationInfo = location.IsValid ? 
-                            $" (Line {location.StartLinePosition.Line + 1}, Column {location.StartLinePosition.Character + 1})" : "";
-                        
-                        // Include diagnostic ID for better error identification
-                        string diagnosticId = !string.IsNullOrEmpty(diagnostic.Id) ? $" [{diagnostic.Id}]" : "";
-                        errors.Add($"ERROR: {diagnostic.GetMessage()}{diagnosticId}{locationInfo}");
-                    }
-                    else if (diagnostic.Severity == DiagnosticSeverity.Warning)
-                    {
-                        var location = diagnostic.Location.GetLineSpan();
-                        string locationInfo = location.IsValid ? 
-                            $" (Line {location.StartLinePosition.Line + 1}, Column {location.StartLinePosition.Character + 1})" : "";
-                        
-                        string diagnosticId = !string.IsNullOrEmpty(diagnostic.Id) ? $" [{diagnostic.Id}]" : "";
-                        errors.Add($"WARNING: {diagnostic.GetMessage()}{diagnosticId}{locationInfo}");
-                    }
-                }
-                
-                return !hasErrors;
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"ERROR: Semantic validation failed: {ex.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Gets compilation references with caching for performance
-        /// </summary>
-        private static System.Collections.Generic.List<MetadataReference> GetCompilationReferences()
-        {
-            // Check cache validity
-            if (_cachedReferences != null && DateTime.Now - _cacheTime < CacheExpiry)
-            {
-                return _cachedReferences;
-            }
-
-            try
-            {
-                var references = new System.Collections.Generic.List<MetadataReference>();
-
-                // Core .NET assemblies
-                references.Add(MetadataReference.CreateFromFile(typeof(object).Assembly.Location)); // mscorlib/System.Private.CoreLib
-                references.Add(MetadataReference.CreateFromFile(typeof(System.Linq.Enumerable).Assembly.Location)); // System.Linq
-                references.Add(MetadataReference.CreateFromFile(typeof(System.Collections.Generic.List<>).Assembly.Location)); // System.Collections
-
-                // Unity assemblies
-                try
-                {
-                    references.Add(MetadataReference.CreateFromFile(typeof(UnityEngine.Debug).Assembly.Location)); // UnityEngine
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"Could not load UnityEngine assembly: {ex.Message}");
-                }
-
-#if UNITY_EDITOR
-                try
-                {
-                    references.Add(MetadataReference.CreateFromFile(typeof(UnityEditor.Editor).Assembly.Location)); // UnityEditor
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"Could not load UnityEditor assembly: {ex.Message}");
-                }
-
-                // Get Unity project assemblies
-                try
-                {
-                    var assemblies = CompilationPipeline.GetAssemblies();
-                    foreach (var assembly in assemblies)
-                    {
-                        if (File.Exists(assembly.outputPath))
-                        {
-                            references.Add(MetadataReference.CreateFromFile(assembly.outputPath));
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"Could not load Unity project assemblies: {ex.Message}");
-                }
-#endif
-
-                // Cache the results
-                _cachedReferences = references;
-                _cacheTime = DateTime.Now;
-
-                return references;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"Failed to get compilation references: {ex.Message}");
-                return new System.Collections.Generic.List<MetadataReference>();
-            }
-        }
-#else
-        private static bool ValidateScriptSyntaxRoslyn(string contents, ValidationLevel level, System.Collections.Generic.List<string> errors)
-        {
-            // Fallback when Roslyn is not available
-            return true;
-        }
-#endif
-
-        /// <summary>
-        /// Validates Unity-specific coding rules and best practices
-        /// //TODO: Naive Unity Checks and not really yield any results, need to be improved
-        /// </summary>
-        private static void ValidateScriptSyntaxUnity(string contents, System.Collections.Generic.List<string> errors)
-        {
-            // Check for common Unity anti-patterns
-            if (contents.Contains("FindObjectOfType") && contents.Contains("Update()"))
-            {
-                errors.Add("WARNING: FindObjectOfType in Update() can cause performance issues");
-            }
-
-            if (contents.Contains("GameObject.Find") && contents.Contains("Update()"))
-            {
-                errors.Add("WARNING: GameObject.Find in Update() can cause performance issues");
-            }
-
-            // Check for proper MonoBehaviour usage
-            if (contents.Contains(": MonoBehaviour") && !contents.Contains("using UnityEngine"))
-            {
-                errors.Add("WARNING: MonoBehaviour requires 'using UnityEngine;'");
-            }
-
-            // Check for SerializeField usage
-            if (contents.Contains("[SerializeField]") && !contents.Contains("using UnityEngine"))
-            {
-                errors.Add("WARNING: SerializeField requires 'using UnityEngine;'");
-            }
-
-            // Check for proper coroutine usage
-            if (contents.Contains("StartCoroutine") && !contents.Contains("IEnumerator"))
-            {
-                errors.Add("WARNING: StartCoroutine typically requires IEnumerator methods");
-            }
-
-            // Check for Update without FixedUpdate for physics
-            if (contents.Contains("Rigidbody") && contents.Contains("Update()") && !contents.Contains("FixedUpdate()"))
-            {
-                errors.Add("WARNING: Consider using FixedUpdate() for Rigidbody operations");
-            }
-
-            // Check for missing null checks on Unity objects
-            if (contents.Contains("GetComponent<") && !contents.Contains("!= null"))
-            {
-                errors.Add("WARNING: Consider null checking GetComponent results");
-            }
-
-            // Check for proper event function signatures
-            if (contents.Contains("void Start(") && !contents.Contains("void Start()"))
-            {
-                errors.Add("WARNING: Start() should not have parameters");
-            }
-
-            if (contents.Contains("void Update(") && !contents.Contains("void Update()"))
-            {
-                errors.Add("WARNING: Update() should not have parameters");
-            }
-
-            // Check for inefficient string operations
-            if (contents.Contains("Update()") && contents.Contains("\"") && contents.Contains("+"))
-            {
-                errors.Add("WARNING: String concatenation in Update() can cause garbage collection issues");
-            }
-        }
-
-        /// <summary>
-        /// Validates semantic rules and common coding issues
-        /// </summary>
-        private static void ValidateSemanticRules(string contents, System.Collections.Generic.List<string> errors)
-        {
-            // Check for potential memory leaks
-            if (contents.Contains("new ") && contents.Contains("Update()"))
-            {
-                errors.Add("WARNING: Creating objects in Update() may cause memory issues");
-            }
-
-            // Check for magic numbers
-            var magicNumberPattern = new Regex(@"\b\d+\.?\d*f?\b(?!\s*[;})\]])", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
-            var matches = magicNumberPattern.Matches(contents);
-            if (matches.Count > 5)
-            {
-                errors.Add("WARNING: Consider using named constants instead of magic numbers");
-            }
-
-            // Check for long methods (simple line count check)
-            var methodPattern = new Regex(@"(public|private|protected|internal)?\s*(static)?\s*\w+\s+\w+\s*\([^)]*\)\s*{", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
-            var methodMatches = methodPattern.Matches(contents);
-            foreach (Match match in methodMatches)
-            {
-                int startIndex = match.Index;
-                int braceCount = 0;
-                int lineCount = 0;
-                bool inMethod = false;
-
-                for (int i = startIndex; i < contents.Length; i++)
-                {
-                    if (contents[i] == '{')
-                    {
-                        braceCount++;
-                        inMethod = true;
-                    }
-                    else if (contents[i] == '}')
-                    {
-                        braceCount--;
-                        if (braceCount == 0 && inMethod)
-                            break;
-                    }
-                    else if (contents[i] == '\n' && inMethod)
-                    {
-                        lineCount++;
-                    }
-                }
-
-                if (lineCount > 50)
-                {
-                    errors.Add("WARNING: Method is very long, consider breaking it into smaller methods");
-                    break; // Only report once
-                }
-            }
-
-            // Check for proper exception handling
-            if (contents.Contains("catch") && contents.Contains("catch()"))
-            {
-                errors.Add("WARNING: Empty catch blocks should be avoided");
-            }
-
-            // Check for proper async/await usage
-            if (contents.Contains("async ") && !contents.Contains("await"))
-            {
-                errors.Add("WARNING: Async method should contain await or return Task");
-            }
-
-            // Check for hardcoded tags and layers
-            if (contents.Contains("\"Player\"") || contents.Contains("\"Enemy\""))
-            {
-                errors.Add("WARNING: Consider using constants for tags instead of hardcoded strings");
-            }
-        }
-
-        //TODO: A easier way for users to update incorrect scripts (now duplicated with the updateScript method and need to also update server side, put aside for now)
-        /// <summary>
-        /// Public method to validate script syntax with configurable validation level
-        /// Returns detailed validation results including errors and warnings
-        /// </summary>
-        // public static object ValidateScript(JObject @params)
-        // {
-        //     string contents = @params["contents"]?.ToString();
-        //     string validationLevel = @params["validationLevel"]?.ToString() ?? "standard";
-
-        //     if (string.IsNullOrEmpty(contents))
-        //     {
-        //         return new ErrorResponse("Contents parameter is required for validation.");
-        //     }
-
-        //     // Parse validation level
-        //     ValidationLevel level = ValidationLevel.Standard;
-        //     switch (validationLevel.ToLower())
-        //     {
-        //         case "basic": level = ValidationLevel.Basic; break;
-        //         case "standard": level = ValidationLevel.Standard; break;
-        //         case "comprehensive": level = ValidationLevel.Comprehensive; break;
-        //         case "strict": level = ValidationLevel.Strict; break;
-        //         default:
-        //             return new ErrorResponse($"Invalid validation level: '{validationLevel}'. Valid levels are: basic, standard, comprehensive, strict.");
-        //     }
-
-        //     // Perform validation
-        //     bool isValid = ValidateScriptSyntax(contents, level, out string[] validationErrors);
-
-        //     var errors = validationErrors?.Where(e => e.StartsWith("ERROR:")).ToArray() ?? new string[0];
-        //     var warnings = validationErrors?.Where(e => e.StartsWith("WARNING:")).ToArray() ?? new string[0];
-
-        //     var result = new
-        //     {
-        //         isValid = isValid,
-        //         validationLevel = validationLevel,
-        //         errorCount = errors.Length,
-        //         warningCount = warnings.Length,
-        //         errors = errors,
-        //         warnings = warnings,
-        //         summary = isValid 
-        //             ? (warnings.Length > 0 ? $"Validation passed with {warnings.Length} warnings" : "Validation passed with no issues")
-        //             : $"Validation failed with {errors.Length} errors and {warnings.Length} warnings"
-        //     };
-
-        //     if (isValid)
-        //     {
-        //         return new SuccessResponse("Script validation completed successfully.", result);
-        //     }
-        //     else
-        //     {
-        //         return new ErrorResponse("Script validation failed.", result);
-        //     }
-        // }
     }
 
     // Debounced refresh/compile scheduler to coalesce bursts of edits

@@ -2,6 +2,7 @@ using System;
 using MCPForUnity.Editor.Dependencies;
 using MCPForUnity.Editor.Dependencies.Models;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Editor.Setup;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -27,6 +28,12 @@ namespace MCPForUnity.Editor.Windows
         private Button openUvLinkButton;
         private Button refreshButton;
         private Button doneButton;
+
+        // Roslyn
+        private Toggle roslynToggle;
+        private VisualElement roslynIndicator;
+        private Label roslynDetails;
+        private Button roslynHelpButton;
 
         private DependencyCheckResult _dependencyResult;
 
@@ -71,11 +78,26 @@ namespace MCPForUnity.Editor.Windows
             refreshButton = rootVisualElement.Q<Button>("refresh-button");
             doneButton = rootVisualElement.Q<Button>("done-button");
 
+            // Cache Roslyn elements
+            roslynToggle = rootVisualElement.Q<Toggle>("roslyn-toggle");
+            roslynIndicator = rootVisualElement.Q<VisualElement>("roslyn-indicator");
+            roslynDetails = rootVisualElement.Q<Label>("roslyn-details");
+            roslynHelpButton = rootVisualElement.Q<Button>("roslyn-help-button");
+
             // Register callbacks
             refreshButton.clicked += OnRefreshClicked;
             doneButton.clicked += OnDoneClicked;
             openPythonLinkButton.clicked += OnOpenPythonInstallClicked;
             openUvLinkButton.clicked += OnOpenUvInstallClicked;
+            
+            if (roslynToggle != null)
+            {
+                roslynToggle.RegisterValueChangedCallback(OnRoslynToggleChanged);
+            }
+            if (roslynHelpButton != null)
+            {
+                roslynHelpButton.clicked += OnRoslynHelpClicked;
+            }
 
             // Initial update
             UpdateUI();
@@ -112,6 +134,34 @@ namespace MCPForUnity.Editor.Windows
             Application.OpenURL(uvUrl);
         }
 
+        private void OnRoslynToggleChanged(ChangeEvent<bool> evt)
+        {
+            if (evt.newValue)
+            {
+                if (RoslynSetup.IsRoslynAvailable())
+                {
+                    RoslynSetup.SetRoslynEnabled(true);
+                }
+                else
+                {
+                    // Revert toggle if not available
+                    roslynToggle.SetValueWithoutNotify(false);
+                    EditorUtility.DisplayDialog("Roslyn Not Available", 
+                        "The 'Microsoft.CodeAnalysis.CSharp' assembly is not found in the project. Please install it via NuGetForUnity before enabling this feature.", "OK");
+                }
+            }
+            else
+            {
+                RoslynSetup.SetRoslynEnabled(false);
+            }
+            UpdateUI();
+        }
+
+        private void OnRoslynHelpClicked()
+        {
+            Application.OpenURL("https://github.com/GlitchEnzo/NuGetForUnity");
+        }
+
         private void UpdateUI()
         {
             if (_dependencyResult == null)
@@ -144,6 +194,41 @@ namespace MCPForUnity.Editor.Windows
                 statusMessage.style.color = new StyleColor(new Color(1f, 0.6f, 0f)); // Orange
                 installationSection.style.display = DisplayStyle.Flex;
                 installationInstructions.text = DependencyManager.GetInstallationRecommendations();
+            }
+
+            // Update Roslyn status
+            bool isRoslynAvail = RoslynSetup.IsRoslynAvailable();
+            bool isRoslynEnabled = RoslynSetup.IsRoslynEnabled();
+
+            if (roslynToggle != null)
+            {
+                roslynToggle.SetValueWithoutNotify(isRoslynEnabled);
+                roslynToggle.SetEnabled(isRoslynAvail); // Disable toggle if DLL missing
+            }
+
+            if (isRoslynAvail)
+            {
+                roslynIndicator?.RemoveFromClassList("invalid");
+                roslynIndicator?.AddToClassList("valid");
+                if (isRoslynEnabled)
+                {
+                    roslynDetails.text = "Enabled (USE_ROSLYN defined)";
+                    roslynDetails.style.color = new StyleColor(Color.green);
+                }
+                else
+                {
+                    roslynDetails.text = "Available but disabled";
+                    roslynDetails.style.color = new StyleColor(Color.gray);
+                }
+                roslynHelpButton.style.display = DisplayStyle.None;
+            }
+            else
+            {
+                roslynIndicator?.RemoveFromClassList("valid");
+                roslynIndicator?.AddToClassList("invalid");
+                roslynDetails.text = "DLL Missing. Install Microsoft.CodeAnalysis.CSharp via NuGet.";
+                roslynDetails.style.color = new StyleColor(Color.red);
+                roslynHelpButton.style.display = DisplayStyle.Flex;
             }
         }
 

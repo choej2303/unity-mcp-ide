@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using MCPForUnity.Editor.Helpers; // For Response class
+using MCPForUnity.Editor.Services; // Added Services namespace
 using MCPForUnity.Runtime.Helpers; // For ScreenshotUtility
 using Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -466,10 +467,8 @@ namespace MCPForUnity.Editor.Tools
                     );
                 }
 
-                try { McpLog.Info("[ManageScene] get_hierarchy: fetching root objects", always: false); } catch { }
-                GameObject[] rootObjects = activeScene.GetRootGameObjects();
-                try { McpLog.Info($"[ManageScene] get_hierarchy: rootCount={rootObjects?.Length ?? 0}", always: false); } catch { }
-                var hierarchy = rootObjects.Select(go => GetGameObjectDataRecursive(go)).ToList();
+                try { McpLog.Info("[ManageScene] get_hierarchy: fetching hierarchy data", always: false); } catch { }
+                var hierarchy = SceneTraversalService.GetSceneHierarchyData(activeScene);
 
                 var resp = new SuccessResponse(
                     $"Retrieved hierarchy for scene '{activeScene.name}'.",
@@ -485,57 +484,6 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        /// <summary>
-        /// Recursively builds a data representation of a GameObject and its children.
-        /// </summary>
-        private static object GetGameObjectDataRecursive(GameObject go)
-        {
-            if (go == null)
-                return null;
 
-            var childrenData = new List<object>();
-            foreach (Transform child in go.transform)
-            {
-                childrenData.Add(GetGameObjectDataRecursive(child.gameObject));
-            }
-
-            var gameObjectData = new Dictionary<string, object>
-            {
-                { "name", go.name },
-                { "activeSelf", go.activeSelf },
-                { "activeInHierarchy", go.activeInHierarchy },
-                { "tag", go.tag },
-                { "layer", go.layer },
-                { "isStatic", go.isStatic },
-                { "instanceID", go.GetInstanceID() }, // Useful unique identifier
-                {
-                    "transform",
-                    new
-                    {
-                        position = new
-                        {
-                            x = go.transform.localPosition.x,
-                            y = go.transform.localPosition.y,
-                            z = go.transform.localPosition.z,
-                        },
-                        rotation = new
-                        {
-                            x = go.transform.localRotation.eulerAngles.x,
-                            y = go.transform.localRotation.eulerAngles.y,
-                            z = go.transform.localRotation.eulerAngles.z,
-                        }, // Euler for simplicity
-                        scale = new
-                        {
-                            x = go.transform.localScale.x,
-                            y = go.transform.localScale.y,
-                            z = go.transform.localScale.z,
-                        },
-                    }
-                },
-                { "children", childrenData },
-            };
-
-            return gameObjectData;
-        }
     }
 }

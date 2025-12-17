@@ -48,6 +48,22 @@
                 </ui:VisualElement>
             </ui:VisualElement>
         </ui:VisualElement>
+
+        <ui:VisualElement class="section">
+            <ui:Label text="Optional Features" class="section-title" />
+            <ui:VisualElement class="section-content">
+                <!-- Roslyn Support -->
+                <ui:VisualElement class="dependency-item">
+                    <ui:VisualElement class="dependency-row">
+                        <ui:Label text="Advanced Script Validation (Roslyn)" class="dependency-name" style="flex-grow: 1;" />
+                        <ui:Toggle name="roslyn-toggle" text="" />
+                        <ui:VisualElement name="roslyn-indicator" class="status-indicator-small" />
+                    </ui:VisualElement>
+                    <ui:Label name="roslyn-details" class="help-text dependency-details" />
+                    <ui:Button name="roslyn-help-button" text="How to Install..." class="secondary-button" style="display: none; align-self: flex-start; margin-top: 4px;" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
         
         <!-- Action Buttons -->
         <ui:VisualElement class="button-container">
