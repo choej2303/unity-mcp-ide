@@ -14,8 +14,8 @@ namespace MCPForUnity.Editor.Tests.Services
         public void Setup()
         {
             _fs = new StubFileSystem();
-            ScriptService.FileSystem = _fs;
-            ScriptService.AssetsPathProvider = () => _fakeAssetsPath;
+            MCPForUnity.Editor.Helpers.AssetPathUtility.FileSystem = _fs;
+            MCPForUnity.Editor.Helpers.AssetPathUtility.AssetsPathProvider = () => _fakeAssetsPath;
         }
 
         [TearDown]

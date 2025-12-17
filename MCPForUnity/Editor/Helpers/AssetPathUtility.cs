@@ -14,6 +14,70 @@ namespace MCPForUnity.Editor.Helpers
     /// </summary>
     public static class AssetPathUtility
     {
+        public static MCPForUnity.Editor.Services.Abstractions.IFileSystem FileSystem { get; set; } = new MCPForUnity.Editor.Services.Infrastructure.UnityFileSystem();
+        public static Func<string> AssetsPathProvider = () => Application.dataPath.Replace('\\', '/');
+        public static string AssetsPath => AssetsPathProvider();
+
+        /// <summary>
+        /// Validates that a path is within the Assets folder and resolves it to a full path.
+        /// Replaces potentially unsafe ScriptService.TryResolveUnderAssets.
+        /// </summary>
+        public static bool TryResolveSecure(string relDir, out string fullPathDir, out string relPathSafe)
+        {
+            fullPathDir = null;
+            relPathSafe = null;
+
+            if (string.IsNullOrEmpty(relDir))
+            {
+                fullPathDir = AssetsPath;
+                relPathSafe = "";
+                return true;
+            }
+
+            string r = relDir.Replace('\\', '/').Trim();
+            
+            // Allow unity://path/ prefix
+            if (r.StartsWith("unity://path/", StringComparison.OrdinalIgnoreCase)) 
+                r = r.Substring("unity://path/".Length);
+
+            // Handle "Assets/" prefix normalization
+            while (r.StartsWith("Assets/Assets/", StringComparison.OrdinalIgnoreCase))
+                r = r.Substring("Assets/".Length);
+            if (r.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                r = r.Substring("Assets/".Length);
+            
+            r = r.TrimStart('/');
+
+            // Check for directory traversal
+            if (r.Contains(".."))
+                return false;
+
+            string full = Path.GetFullPath(Path.Combine(AssetsPath, r)).Replace('\\', '/');
+
+            // Must start with Assets path
+            if (!full.StartsWith(AssetsPath, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Check for symlinks that might break out
+            string checkPath = full;
+            string rootPath = AssetsPath;
+            try
+            {
+                while (checkPath != null && checkPath.Length >= rootPath.Length)
+                {
+                    if (FileSystem.IsSymlink(checkPath))
+                         return false; 
+                    
+                    checkPath = Path.GetDirectoryName(checkPath);
+                }
+            }
+            catch { /* best effort */ }
+
+            fullPathDir = full;
+            relPathSafe = ("Assets/" + r).TrimEnd('/');
+            return true;
+        }
+
         /// <summary>
         /// Normalizes a Unity asset path by ensuring forward slashes are used and that it is rooted under "Assets/".
         /// </summary>

@@ -11,67 +11,17 @@ namespace MCPForUnity.Editor.Services
     /// </summary>
     public static class ScriptService
     {
-        public static MCPForUnity.Editor.Services.Abstractions.IFileSystem FileSystem { get; set; } = new MCPForUnity.Editor.Services.Infrastructure.UnityFileSystem();
+        public static string AssetsPath => MCPForUnity.Editor.Helpers.AssetPathUtility.AssetsPath;
 
-        public static Func<string> AssetsPathProvider = () => Application.dataPath.Replace('\\', '/');
-        public static string AssetsPath => AssetsPathProvider();
-
+        /// <summary>
+        /// Validates that a path is within the Assets folder and resolves it to a full path.
+        /// </summary>
         /// <summary>
         /// Validates that a path is within the Assets folder and resolves it to a full path.
         /// </summary>
         public static bool TryResolveUnderAssets(string relDir, out string fullPathDir, out string relPathSafe)
         {
-            fullPathDir = null;
-            relPathSafe = null;
-
-            if (string.IsNullOrEmpty(relDir))
-            {
-                fullPathDir = AssetsPath;
-                relPathSafe = "";
-                return true;
-            }
-
-            // Normalize
-            string r = relDir.Replace('\\', '/').Trim();
-            
-            // Remove typical prefixes if present
-            if (r.StartsWith("unity://path/", StringComparison.OrdinalIgnoreCase)) 
-                r = r.Substring("unity://path/".Length);
-            while (r.StartsWith("Assets/Assets/", StringComparison.OrdinalIgnoreCase))
-                r = r.Substring("Assets/".Length);
-            if (r.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
-                r = r.Substring("Assets/".Length);
-            
-            r = r.TrimStart('/');
-
-            // Check for directory traversal
-            if (r.Contains(".."))
-                return false;
-
-            string full = Path.GetFullPath(Path.Combine(AssetsPath, r)).Replace('\\', '/');
-
-            // Must start with Assets path
-            if (!full.StartsWith(AssetsPath, StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            // Check for symlinks that might break out
-            string checkPath = full;
-            string rootPath = AssetsPath;
-            try
-            {
-                while (checkPath != null && checkPath.Length >= rootPath.Length)
-                {
-                    if (FileSystem.IsSymlink(checkPath))
-                         return false; // Symbolic link detected
-                    
-                    checkPath = Path.GetDirectoryName(checkPath);
-                }
-            }
-            catch { /* best effort */ }
-
-            fullPathDir = full;
-            relPathSafe = r;
-            return true;
+            return MCPForUnity.Editor.Helpers.AssetPathUtility.TryResolveSecure(relDir, out fullPathDir, out relPathSafe);
         }
 
         public static bool FindScriptByGuid(string guid, out string fullPath)

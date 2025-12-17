@@ -34,9 +34,12 @@ namespace MCPForUnity.Editor.Services
         {
             if (string.IsNullOrEmpty(path))
                 return new ErrorResponse("'path' is required for reimport.");
-            string fullPath = AssetPathUtility.SanitizeAssetPath(path);
-            if (!AssetExists(fullPath))
-                return new ErrorResponse($"Asset not found at path: {fullPath}");
+            
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullPath, out string relPath))
+                return new ErrorResponse($"Invalid path or security violation: {path}");
+
+            if (!AssetExists(relPath))
+                return new ErrorResponse($"Asset not found at path: {relPath}");
 
             try
             {
@@ -69,7 +72,9 @@ namespace MCPForUnity.Editor.Services
             if (string.IsNullOrEmpty(assetType))
                 return new ErrorResponse("'assetType' is required for create.");
 
-            string fullPath = AssetPathUtility.SanitizeAssetPath(path);
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullPath, out string relPath))
+                return new ErrorResponse($"Invalid path or security violation: {path}");
+
             string directory = Path.GetDirectoryName(fullPath);
 
             // Ensure directory exists
@@ -175,9 +180,12 @@ namespace MCPForUnity.Editor.Services
         {
             if (string.IsNullOrEmpty(path))
                 return new ErrorResponse("'path' is required for create_folder.");
-            string fullPath = AssetPathUtility.SanitizeAssetPath(path);
-            string parentDir = Path.GetDirectoryName(fullPath);
-            string folderName = Path.GetFileName(fullPath);
+            
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullPath, out string relPath))
+                return new ErrorResponse($"Invalid path or security violation: {path}");
+
+            string parentDir = Path.GetDirectoryName(relPath);
+            string folderName = Path.GetFileName(relPath);
 
             if (AssetExists(fullPath))
             {
@@ -221,9 +229,11 @@ namespace MCPForUnity.Editor.Services
             if (properties == null || !properties.HasValues)
                 return new ErrorResponse("'properties' are required for modify.");
 
-            string fullPath = AssetPathUtility.SanitizeAssetPath(path);
-            if (!AssetExists(fullPath))
-                return new ErrorResponse($"Asset not found at path: {fullPath}");
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullPath, out string relPath))
+                return new ErrorResponse($"Invalid path or security violation: {path}");
+
+            if (!AssetExists(relPath))
+                return new ErrorResponse($"Asset not found at path: {relPath}");
 
             try
             {
@@ -310,9 +320,12 @@ namespace MCPForUnity.Editor.Services
         {
             if (string.IsNullOrEmpty(path))
                 return new ErrorResponse("'path' is required for delete.");
-            string fullPath = AssetPathUtility.SanitizeAssetPath(path);
-            if (!AssetExists(fullPath))
-                return new ErrorResponse($"Asset not found at path: {fullPath}");
+
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullPath, out string relPath))
+                return new ErrorResponse($"Invalid path or security violation: {path}");
+
+            if (!AssetExists(relPath))
+                return new ErrorResponse($"Asset not found at path: {relPath}");
 
             try
             {
@@ -333,34 +346,38 @@ namespace MCPForUnity.Editor.Services
             if (string.IsNullOrEmpty(path))
                 return new ErrorResponse("'path' is required for duplicate.");
 
-            string sourcePath = AssetPathUtility.SanitizeAssetPath(path);
-            if (!AssetExists(sourcePath))
-                return new ErrorResponse($"Source asset not found at path: {sourcePath}");
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullSource, out string relSource))
+                 return new ErrorResponse($"Invalid source path: {path}");
 
-            string destPath;
+            if (!AssetExists(relSource))
+                return new ErrorResponse($"Source asset not found at path: {relSource}");
+
+            string destRel;
             if (string.IsNullOrEmpty(destinationPath))
             {
-                destPath = AssetDatabase.GenerateUniqueAssetPath(sourcePath);
+                destRel = AssetDatabase.GenerateUniqueAssetPath(relSource);
             }
             else
             {
-                destPath = AssetPathUtility.SanitizeAssetPath(destinationPath);
-                if (AssetExists(destPath))
-                    return new ErrorResponse($"Asset already exists at destination path: {destPath}");
-                EnsureDirectoryExists(Path.GetDirectoryName(destPath));
+                if (!AssetPathUtility.TryResolveSecure(destinationPath, out string fullDest, out destRel))
+                    return new ErrorResponse($"Invalid destination path: {destinationPath}");
+
+                if (AssetExists(destRel))
+                    return new ErrorResponse($"Asset already exists at destination path: {destRel}");
+                EnsureDirectoryExists(Path.GetDirectoryName(destRel));
             }
 
             try
             {
-                bool success = AssetDatabase.CopyAsset(sourcePath, destPath);
+                bool success = AssetDatabase.CopyAsset(relSource, destRel);
                 if (success)
-                    return new SuccessResponse($"Asset '{sourcePath}' duplicated to '{destPath}'.", GetAssetData(destPath));
+                    return new SuccessResponse($"Asset '{relSource}' duplicated to '{destRel}'.", GetAssetData(destRel));
                 else
                     return new ErrorResponse($"Failed to duplicate asset.");
             }
             catch (Exception e)
             {
-                return new ErrorResponse($"Error duplicating asset '{sourcePath}': {e.Message}");
+                return new ErrorResponse($"Error duplicating asset '{relSource}': {e.Message}");
             }
         }
 
@@ -371,31 +388,34 @@ namespace MCPForUnity.Editor.Services
             if (string.IsNullOrEmpty(destinationPath))
                 return new ErrorResponse("'destination' is required.");
 
-            string sourcePath = AssetPathUtility.SanitizeAssetPath(path);
-            string destPath = AssetPathUtility.SanitizeAssetPath(destinationPath);
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullSource, out string relSource))
+                 return new ErrorResponse($"Invalid source path: {path}");
+            
+            if (!AssetPathUtility.TryResolveSecure(destinationPath, out string fullDest, out destRel))
+                 return new ErrorResponse($"Invalid destination path: {destinationPath}");
 
-            if (!AssetExists(sourcePath))
-                return new ErrorResponse($"Source asset not found at path: {sourcePath}");
-            if (AssetExists(destPath))
-                return new ErrorResponse($"Asset already exists at destination: {destPath}");
+            if (!AssetExists(relSource))
+                return new ErrorResponse($"Source asset not found at path: {relSource}");
+            if (AssetExists(destRel))
+                return new ErrorResponse($"Asset already exists at destination: {destRel}");
 
-            EnsureDirectoryExists(Path.GetDirectoryName(destPath));
+            EnsureDirectoryExists(Path.GetDirectoryName(destRel));
 
             try
             {
-                string error = AssetDatabase.ValidateMoveAsset(sourcePath, destPath);
+                string error = AssetDatabase.ValidateMoveAsset(relSource, destRel);
                 if (!string.IsNullOrEmpty(error))
                     return new ErrorResponse($"Failed to move/rename: {error}");
 
-                string guid = AssetDatabase.MoveAsset(sourcePath, destPath);
+                string guid = AssetDatabase.MoveAsset(relSource, destRel);
                 if (!string.IsNullOrEmpty(guid))
-                    return new SuccessResponse($"Asset moved/renamed to '{destPath}'.", GetAssetData(destPath));
+                    return new SuccessResponse($"Asset moved/renamed to '{destRel}'.", GetAssetData(destRel));
                 else
                     return new ErrorResponse("MoveAsset call failed.");
             }
             catch (Exception e)
             {
-                return new ErrorResponse($"Error moving/renaming asset '{sourcePath}': {e.Message}");
+                return new ErrorResponse($"Error moving/renaming asset '{relSource}': {e.Message}");
             }
         }
 
@@ -418,10 +438,13 @@ namespace MCPForUnity.Editor.Services
             string[] folderScope = null;
             if (!string.IsNullOrEmpty(pathScope))
             {
-                folderScope = new string[] { AssetPathUtility.SanitizeAssetPath(pathScope) };
-                if (!AssetDatabase.IsValidFolder(folderScope[0]))
+                if (AssetPathUtility.TryResolveSecure(pathScope, out _, out string safeScope))
                 {
-                    folderScope = null;
+                    folderScope = new string[] { safeScope };
+                    if (!AssetDatabase.IsValidFolder(folderScope[0]))
+                    {
+                        folderScope = null;
+                    }
                 }
             }
 
@@ -471,11 +494,14 @@ namespace MCPForUnity.Editor.Services
         {
             if (string.IsNullOrEmpty(path))
                 return new ErrorResponse("'path' is required.");
-            string fullPath = AssetPathUtility.SanitizeAssetPath(path);
-            if (!AssetExists(fullPath))
-                return new ErrorResponse($"Asset not found at path: {fullPath}");
+            
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullPath, out string relPath))
+                return new ErrorResponse($"Invalid path or security violation: {path}");
 
-            return new SuccessResponse("Asset info retrieved.", GetAssetData(fullPath, generatePreview));
+            if (!AssetExists(relPath))
+                return new ErrorResponse($"Asset not found at path: {relPath}");
+
+            return new SuccessResponse("Asset info retrieved.", GetAssetData(relPath, generatePreview));
         }
 
         public static object GetComponentsFromAsset(string path)
@@ -483,19 +509,21 @@ namespace MCPForUnity.Editor.Services
             if (string.IsNullOrEmpty(path))
                 return new ErrorResponse("'path' is required.");
 
-            string fullPath = AssetPathUtility.SanitizeAssetPath(path);
-            if (!AssetExists(fullPath))
-                return new ErrorResponse($"Asset not found at path: {fullPath}");
+            if (!AssetPathUtility.TryResolveSecure(path, out string fullPath, out string relPath))
+                return new ErrorResponse($"Invalid path or security violation: {path}");
+
+            if (!AssetExists(relPath))
+                return new ErrorResponse($"Asset not found at path: {relPath}");
 
             try
             {
-                UnityEngine.Object asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(fullPath);
+                UnityEngine.Object asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(relPath);
                 if (asset == null)
-                    return new ErrorResponse($"Failed to load asset at path: {fullPath}");
+                    return new ErrorResponse($"Failed to load asset at path: {relPath}");
 
                 GameObject gameObject = asset as GameObject;
                 if (gameObject == null)
-                    return new ErrorResponse($"Asset at '{fullPath}' is not a GameObject (Type: {asset.GetType().FullName}).");
+                    return new ErrorResponse($"Asset at '{relPath}' is not a GameObject (Type: {asset.GetType().FullName}).");
 
                 Component[] components = gameObject.GetComponents<Component>();
                 var componentList = components.Select(comp => new { typeName = comp.GetType().FullName, instanceID = comp.GetInstanceID() }).ToList<object>();
