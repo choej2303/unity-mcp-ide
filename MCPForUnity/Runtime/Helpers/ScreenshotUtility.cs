@@ -122,6 +122,53 @@ namespace MCPForUnity.Runtime.Helpers
             }
 
             return new ScreenshotCaptureResult(normalizedFullPath, assetsRelativePath, size);
+            return new ScreenshotCaptureResult(normalizedFullPath, assetsRelativePath, size);
+        }
+
+        public static string CaptureFromCameraToBase64(Camera camera, int superSize = 1)
+        {
+             if (camera == null) return null;
+
+             int size = Mathf.Max(1, superSize);
+             int width = Mathf.Max(1, camera.pixelWidth > 0 ? camera.pixelWidth : Screen.width);
+             int height = Mathf.Max(1, camera.pixelHeight > 0 ? camera.pixelHeight : Screen.height);
+             width *= size;
+             height *= size;
+
+             RenderTexture prevRT = camera.targetTexture;
+             RenderTexture prevActive = RenderTexture.active;
+             var rt = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
+             string base64 = null;
+
+             try
+             {
+                 camera.targetTexture = rt;
+                 camera.Render();
+
+                 RenderTexture.active = rt;
+                 var tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                 tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                 tex.Apply();
+
+                 byte[] png = tex.EncodeToPNG();
+                 base64 = Convert.ToBase64String(png);
+                 
+                 if (Application.isEditor)
+                 {
+                     UnityEngine.Object.DestroyImmediate(tex);
+                 }
+                 else
+                 {
+                     UnityEngine.Object.Destroy(tex);
+                 }
+             }
+             finally
+             {
+                 camera.targetTexture = prevRT;
+                 RenderTexture.active = prevActive;
+                 RenderTexture.ReleaseTemporary(rt);
+             }
+             return base64;
         }
 
         private static string BuildFileName(string fileName)

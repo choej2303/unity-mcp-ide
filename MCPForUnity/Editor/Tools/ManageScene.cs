@@ -27,7 +27,8 @@ namespace MCPForUnity.Editor.Tools
             public int? buildIndex { get; set; }
             public string fileName { get; set; } = string.Empty;
             public int? superSize { get; set; }
-            public int? maxDepth { get; set; }
+            public int? maxDepth { get; set; } // Added in previous step
+            public bool? returnBase64 { get; set; }
         }
 
         private static SceneCommand ToSceneCommand(JObject p)
@@ -50,7 +51,8 @@ namespace MCPForUnity.Editor.Tools
                 buildIndex = BI(p["buildIndex"] ?? p["build_index"]),
                 fileName = (p["fileName"] ?? p["filename"])?.ToString() ?? string.Empty,
                 superSize = BI(p["superSize"] ?? p["super_size"] ?? p["supersize"]),
-                maxDepth = BI(p["maxDepth"] ?? p["max_depth"])
+                maxDepth = BI(p["maxDepth"] ?? p["max_depth"]),
+                returnBase64 = p["returnBase64"]?.ToObject<bool>() ?? p["return_base64"]?.ToObject<bool>()
             };
         }
 
@@ -151,7 +153,7 @@ namespace MCPForUnity.Editor.Tools
                 case "get_build_settings":
                     return GetBuildSettingsScenes();
                 case "screenshot":
-                    return CaptureScreenshot(cmd.fileName, cmd.superSize);
+                    return CaptureScreenshot(cmd.fileName, cmd.superSize, cmd.returnBase64);
                 // Add cases for modifying build settings, additive loading, unloading etc.
                 default:
                     return new ErrorResponse(
@@ -349,11 +351,23 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static object CaptureScreenshot(string fileName, int? superSize)
+        private static object CaptureScreenshot(string fileName, int? superSize, bool? returnBase64)
         {
             try
             {
                 int resolvedSuperSize = (superSize.HasValue && superSize.Value > 0) ? superSize.Value : 1;
+                
+                if (returnBase64.GetValueOrDefault(false))
+                {
+                     Camera cam = Camera.main ?? UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsSortMode.None).FirstOrDefault();
+                     if (cam == null) return new ErrorResponse("No camera found for base64 capture.");
+                     
+                     string b64 = ScreenshotUtility.CaptureFromCameraToBase64(cam, resolvedSuperSize);
+                     if (string.IsNullOrEmpty(b64)) return new ErrorResponse("Failed to capture base64 screenshot.");
+
+                     return new SuccessResponse("Screenshot captured (base64).", new { base64 = b64, superSize = resolvedSuperSize });
+                }
+
                 ScreenshotCaptureResult result;
 
                 if (Application.isPlaying)
@@ -363,12 +377,7 @@ namespace MCPForUnity.Editor.Tools
                 else
                 {
                     // Edit Mode path: render from the best-guess camera using RenderTexture.
-                    Camera cam = Camera.main;
-                    if (cam == null)
-                    {
-                        var cams = UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsSortMode.None);
-                        cam = cams.FirstOrDefault();
-                    }
+                    Camera cam = Camera.main ?? UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsSortMode.None).FirstOrDefault();
 
                     if (cam == null)
                     {
