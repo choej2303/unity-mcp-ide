@@ -11,7 +11,10 @@ namespace MCPForUnity.Editor.Services
     /// </summary>
     public static class ScriptService
     {
-        public static string AssetsPath => Application.dataPath.Replace('\\', '/');
+        public static MCPForUnity.Editor.Services.Abstractions.IFileSystem FileSystem { get; set; } = new MCPForUnity.Editor.Services.Infrastructure.UnityFileSystem();
+
+        public static Func<string> AssetsPathProvider = () => Application.dataPath.Replace('\\', '/');
+        public static string AssetsPath => AssetsPathProvider();
 
         /// <summary>
         /// Validates that a path is within the Assets folder and resolves it to a full path.
@@ -52,20 +55,16 @@ namespace MCPForUnity.Editor.Services
                 return false;
 
             // Check for symlinks that might break out
+            string checkPath = full;
+            string rootPath = AssetsPath;
             try
             {
-                var di = new DirectoryInfo(full);
-                if (di.Exists)
+                while (checkPath != null && checkPath.Length >= rootPath.Length)
                 {
-                    // Walk up to check for reparse points
-                   var current = di;
-                   var root = new DirectoryInfo(AssetsPath);
-                   while (current != null && current.FullName.Length >= root.FullName.Length)
-                   {
-                       if (current.Exists && (current.Attributes & FileAttributes.ReparsePoint) != 0)
-                            return false; // Symbolic link detected
-                       current = current.Parent;
-                   }
+                    if (FileSystem.IsSymlink(checkPath))
+                         return false; // Symbolic link detected
+                    
+                    checkPath = Path.GetDirectoryName(checkPath);
                 }
             }
             catch { /* best effort */ }
