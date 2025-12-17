@@ -514,7 +514,7 @@ namespace MCPForUnity.Editor.Helpers
         }
 
         // --- Define custom JsonSerializerSettings for OUTPUT ---
-        private static readonly JsonSerializerSettings _outputSerializerSettings = new JsonSerializerSettings
+        public static readonly JsonSerializerSettings SerializerSettings = new JsonSerializerSettings
         {
             Converters = new List<JsonConverter>
             {
@@ -529,7 +529,8 @@ namespace MCPForUnity.Editor.Helpers
             ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
             // ContractResolver = new DefaultContractResolver { NamingStrategy = new CamelCaseNamingStrategy() } // Example if needed
         };
-        private static readonly JsonSerializer _outputSerializer = JsonSerializer.Create(_outputSerializerSettings);
+        public static readonly JsonSerializer Serializer = JsonSerializer.Create(SerializerSettings);
+        // --- End Define custom JsonSerializerSettings ---
         // --- End Define custom JsonSerializerSettings ---
 
         // Helper to create JToken using the output serializer
@@ -540,7 +541,7 @@ namespace MCPForUnity.Editor.Helpers
             try
             {
                 // Use the pre-configured OUTPUT serializer instance
-                return JToken.FromObject(value, _outputSerializer);
+                return JToken.FromObject(value, Serializer);
             }
             catch (JsonSerializationException e)
             {

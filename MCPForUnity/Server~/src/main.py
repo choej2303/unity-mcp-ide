@@ -27,55 +27,10 @@ from transport.unity_instance_middleware import (
     get_unity_instance_middleware
 )
 
-# Configure logging using settings from config
-logging.basicConfig(
-    level=getattr(logging, config.log_level),
-    format=config.log_format,
-    stream=None,  # None -> defaults to sys.stderr; avoid stdout used by MCP stdio
-    force=True    # Ensure our handler replaces any prior stdout handlers
-)
+# Configure logging using separated module
+from core.logging_setup import setup_logging, silence_stdio_loggers
+_fh = setup_logging()
 logger = logging.getLogger("mcp-for-unity-server")
-
-# Also write logs to a rotating file so logs are available when launched via stdio
-try:
-    if os.name == 'nt':
-        _base_dir = os.environ.get('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
-        _log_dir = os.path.join(_base_dir, "UnityMCP", "Logs")
-    else:
-        _log_dir = os.path.join(os.path.expanduser(
-            "~/Library/Application Support/UnityMCP"), "Logs")
-    os.makedirs(_log_dir, exist_ok=True)
-    _file_path = os.path.join(_log_dir, "unity_mcp_server.log")
-    _fh = RotatingFileHandler(
-        _file_path, maxBytes=512*1024, backupCount=2, encoding="utf-8")
-    _fh.setFormatter(logging.Formatter(config.log_format))
-    _fh.setLevel(getattr(logging, config.log_level))
-    logger.addHandler(_fh)
-    logger.propagate = False  # Prevent double logging to root logger
-    # Also route telemetry logger to the same rotating file and normal level
-    try:
-        tlog = logging.getLogger("unity-mcp-telemetry")
-        tlog.setLevel(getattr(logging, config.log_level))
-        tlog.addHandler(_fh)
-        tlog.propagate = False  # Prevent double logging for telemetry too
-    except Exception as exc:
-        # Never let logging setup break startup
-        logger.debug("Failed to configure telemetry logger", exc_info=exc)
-except Exception as exc:
-    # Never let logging setup break startup
-    logger.debug("Failed to configure main logger file handler", exc_info=exc)
-# Quieten noisy third-party loggers to avoid clutter during stdio handshake
-for noisy in (
-    "httpx", 
-    "urllib3", 
-    "mcp.server.lowlevel.server", 
-):
-    try:
-        logging.getLogger(noisy).setLevel(
-            max(logging.WARNING, getattr(logging, config.log_level)))
-        logging.getLogger(noisy).propagate = False
-    except Exception:
-        pass
 
 # Import telemetry only after logging is configured to ensure its logs use stderr and proper levels
 # Ensure a slightly higher telemetry timeout unless explicitly overridden by env
@@ -422,19 +377,8 @@ Examples:
         logger.info("Starting FastMCP with stdio transport")
         # 🚨 [CRITICAL] In STDIO mode only, suppress related loggers.
         # Silence Uvicorn and related loggers to prevent stdout pollution.
-        # 🚨 [CRITICAL] Prevent stdout pollution in STDIO mode
-        for name in (
-            "uvicorn", "uvicorn.error", "uvicorn.access",
-            "starlette",
-            "docket", "docket.worker",
-            "fastmcp",
-        ):
-            lg = logging.getLogger(name)
-            lg.setLevel(logging.WARNING) # ERROR if still too chatty
-            lg.propagate = False # prevent duplicate root logs
-            # If the rotating file handler was successfully created, attach it
-            if '_fh' in globals() and _fh not in lg.handlers:
-                lg.addHandler(_fh)
+        # Use the helper from logging_setup
+        silence_stdio_loggers(_fh)
 
         mcp.run(transport='stdio')
 
