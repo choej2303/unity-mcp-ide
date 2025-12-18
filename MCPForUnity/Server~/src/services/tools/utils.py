@@ -1,9 +1,14 @@
 import json
 import re
 import os
+import bisect
 from typing import Any
 from urllib.parse import urlparse, unquote
 import math
+
+# Pre-compiled regex patterns for performance
+_METHOD_SIGNATURE_PATTERN = re.compile(r'\b(void|public|private|protected)\s+\w+\s*\(')
+_DOLLAR_BACKREF_PATTERN = re.compile(r"\$(\d+)")
 
 
 def parse_json_payload(payload: str | Any) -> Any:
@@ -253,7 +258,7 @@ def apply_edits_locally(original_text: str, edits: list[dict[str, Any]]) -> str:
             pattern = edit.get("pattern", "")
             repl = edit.get("replacement", "")
             # Translate $n backrefs (our input) to Python \g<n>
-            repl_py = re.sub(r"\$(\d+)", r"\\g<\1>", repl)
+            repl_py = _DOLLAR_BACKREF_PATTERN.sub(r"\\g<\1>", repl)
             count = int(edit.get("count", 0))  # 0 = replace all
             flags = re.MULTILINE
             if edit.get("ignore_case"):
@@ -331,14 +336,20 @@ def _find_best_closing_brace_match(matches, text: str):
 
     scored_matches = []
     lines = text.splitlines()
+    
+    # Optimization: Precompute line start indices for O(log L) line lookup
+    # Instead of text[:pos].count('\n') which is O(N) per match
+    line_starts = [0]
+    for i, char in enumerate(text):
+        if char == '\n':
+            line_starts.append(i + 1)
 
     for match in matches:
         score = 0
         start_pos = match.start()
 
-        # Find which line this match is on
-        lines_before = text[:start_pos].count('\n')
-        line_num = lines_before
+        # Find which line this match is on using binary search - O(log L)
+        line_num = bisect.bisect_right(line_starts, start_pos) - 1
 
         if line_num < len(lines):
             line_content = lines[line_num]
@@ -362,7 +373,7 @@ def _find_best_closing_brace_match(matches, text: str):
 
             # Penalize if this looks like it's inside a method (has method-like patterns above)
             for context_line in context_lines:
-                if re.search(r'\b(void|public|private|protected)\s+\w+\s*\(', context_line):
+                if _METHOD_SIGNATURE_PATTERN.search(context_line):
                     score -= 5  # Penalty for being near method signatures
 
             # Bonus if this looks like a class-ending brace (very minimal indentation and near EOF)
